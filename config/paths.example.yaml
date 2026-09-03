@@ -1,0 +1,25 @@
+# Copy to paths.yaml and set paths for your environment.
+# Alternatively, set the BVI_DATA_ROOT environment variable.
+
+data_root: /path/to/SOCIAL_PAPER
+
+nbi:
+  raw_dir: "{data_root}/California_brdgs/NBI/2024del"
+  bridges_csv: "{data_root}/California_brdgs/NBI/nbi_bridges.csv"
+  bridges_geo_csv: "{data_root}/California_brdgs/NBI/nbi_bridges_geo.csv"
+  bridges_enriched_csv: "{data_root}/California_brdgs/NBI/nbi_bridges_geo_county.csv"
+
+osm:
+  hpc_output_dir: "{data_root}/HPC_output_updated"
+  combined_lines: "{data_root}/HPC_output_updated/combined_nbi_lines.shp"
+
+displacement:
+  raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif"
+
+ps_density:
+  raster: "{data_root}/merged_california.tif"
+
+results:
+  pfa_dir: "{data_root}/PFA_results_08_01_2026"
+  plots_dir: "{data_root}/plots_08_01_2026"
+  maps_dir: "{data_root}/plots_maps_08_01_2026"

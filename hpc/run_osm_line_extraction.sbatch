@@ -26,7 +26,7 @@ conda activate /scratch/dmalinowska/.conda/envs/cpu_env_for_3rd_paper
 # processes 1024 bridges at a time
 for i in {15360..23000..1024}
 do
-    srun python3 /home/dmalinowska/PS_predictions/src/ps_predictions/third_paper/process_nbi_data/generate_lines_for_brdgs.py  --min_range $i
+    srun python3 -m bridge_vulnerability.data_prep.osm_extract_mpi --min_range $i
 done
 
 conda deactivate
