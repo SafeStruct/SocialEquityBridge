@@ -1,0 +1,1368 @@
+# ============================================================================
+# IMPORTS
+# ============================================================================
+import os
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.decomposition import PCA
+import warnings
+
+from factor_analyzer.factor_analyzer import calculate_kmo, calculate_bartlett_sphericity
+from ps_predictions.third_paper.robust_pca import RobustPCA
+from ps_predictions.third_paper.pca_helper_functions import (
+    plot_variance,
+    create_explained_variance_table,
+    plot_scree,
+    create_pca_components_table,
+    create_data_characteristics,
+    plot_correlation_matrix,
+    plot_distributions,
+    highlight_diagonal,
+    varimax_rotation,
+    highlight_max,
+    plot_county_scatter_matrix,
+    calculate_robust_mahalanobis,
+    scale_data,
+    transform_skewed_variables,
+    cap_outliers,
+)
+
+# Filter specific warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="factor_analyzer.utils")
+warnings.filterwarnings("ignore", category=pd.errors.DtypeWarning)
+
+# ============================================================================
+# CONFIGURATION VARIABLES
+# ============================================================================
+
+# Paths
+folder_path = "/mnt/e/SOCIAL_PAPER"
+results_path = os.path.join(folder_path, "PFA_results_08_01_2026")
+plots_path = os.path.join(folder_path, "plots_08_01_2026")
+
+# Input file paths
+nbi_csv_path = os.path.join(
+    folder_path, "California_brdgs/NBI", "nbi_bridges_geo_county.csv"
+)
+subsidence_and_monitoring_csv = os.path.join(
+    folder_path, "bridge_lines_displacement_spaceborne_monitoring.csv"
+)
+
+# Output file paths (used in main execution)
+output_scaled_df_csv = os.path.join(results_path, "scaled_df_original.csv")
+output_final_weights_df_csv = os.path.join(results_path, "final_weights_df_original.csv")
+
+# NBI column names
+columns_nbi = [
+    "ADT_029",
+    "PERCENT_ADT_TRUCK_109",
+    "HIGHWAY_SYSTEM_104",
+    "DETOUR_KILOS_019",
+    "SUPERSTRUCTURE_COND_059",
+    "SUBSTRUCTURE_COND_060",
+    "FRACTURE_092A",
+    "SCOUR_CRITICAL_113",
+    "WATERWAY_EVAL_071",
+    "DECK_COND_058",
+    "INVENTORY_RATING_066",
+    "YEAR_BUILT_027",
+    "DATE_OF_INSPECT_090",
+    "INSPECT_FREQ_MONTHS_091",
+    "DECK_AREA",
+    "COUNTY_CODE_003",
+    "GDP2023",
+]
+
+# Sub-indicator names
+sub_indicator_names = [
+    "Traffic load",
+    "Strategic importance",
+    "Detour impact",
+    "Structural vulnerability",
+    "Capacity issues",
+    "Natural hazard vulnerability",
+    "Inspection burden",
+    "Economic pressure",
+    "Lack of monitoring",
+]
+
+# Replacement cost constants (dollars/ft^2)
+# Source: https://www.fhwa.dot.gov/bridge/nbi/sd2023.cfm, Cost Used For 2023 Estimates
+replacement_cost_NHS = 360
+replacement_cost_non_NHS = 466
+# Conversion: 1 sq meter = 10.76391 sq feet
+sq_meter_to_sq_feet = 10.76391
+replacement_cost_NHS_sqm = replacement_cost_NHS * sq_meter_to_sq_feet
+replacement_cost_non_NHS_sqm = replacement_cost_non_NHS * sq_meter_to_sq_feet
+
+# Reference date for inspection calculations
+reference_date = pd.Timestamp("2024-01-01")
+
+# Plot configuration
+dpi = 600
+dpi_pairplot = 300
+font_size = 14
+figsize_heatmap = (10, 8)
+figsize_residual = (10, 8)
+
+# Default threshold values (can be overridden in function calls)
+DEFAULT_ADT_THRESHOLD = 25000
+DEFAULT_DETOUR_THRESHOLD_MILES = 15
+DEFAULT_WATERWAY_EVAL_THRESHOLD = 3
+DEFAULT_SCOUR_CRITICAL_THRESHOLD = 3
+DEFAULT_DISPLACEMENT_THRESHOLD = 10
+DEFAULT_N_COMPONENTS_RETAINED = 4
+DEFAULT_PCA_TYPE = "standard"
+DEFAULT_VERBOSE = True
+DEFAULT_CAPPING = True
+DEFAULT_SKEW_THRESHOLD = 9999
+DEFAULT_DYNAMIC_COMPONENTS_RETENTION = False
+DEFAULT_VARIANCE_THRESHOLD = 0.8
+DEFAULT_AGGREGATION_METHOD = "simplified"
+DEFAULT_RETURN_COUNTY_DATA = False
+DEFAULT_MAHALANOBIS_THRESHOLD = 97.5
+DEFAULT_DROP_INDICATOR = "none"
+
+# Additional threshold constants (used internally)
+ADTT_THRESHOLD = 15
+CONDITION_RATING_THRESHOLD = 4
+DECK_CONDITION_THRESHOLD = 4
+INVENTORY_RATING_THRESHOLD = 10.8
+MONITORING_AVAILABILITY_THRESHOLD = 0.4
+INSPECTION_FREQ_THRESHOLD = 24
+MONTHS_TILL_NEXT_INSPECTION_THRESHOLD = 1
+
+# Robust PCA parameters
+ROBUST_PCA_ALPHA = 0.5
+ROBUST_PCA_NDIR = 15000
+ROBUST_PCA_SKEW = True
+
+# Variance preservation tolerance
+VARIANCE_TOLERANCE = 1e-10
+
+
+# ============================================================================
+# FUNCTIONS
+# ============================================================================
+
+def preprocess_data(verbose=True):
+    """
+    Load and preprocess the NBI data.
+
+    Parameters
+    ----------
+    verbose : bool
+        Whether to print information and save intermediate files
+
+    Returns
+    -------
+    pd.DataFrame
+        Preprocessed county-level DataFrame ready for PCA analysis
+    """
+    # ======= Prepare NBI data =======
+    # Import NBI data
+    nbi_df = pd.read_csv(nbi_csv_path, low_memory=False)
+
+    # Filter NBI data
+    nbi_df = nbi_df[columns_nbi]
+
+    # ==== Correct according to guidelines ====
+    # Correct superstructure condition
+    nbi_df["SUPERSTRUCTURE_COND_059"] = (
+        nbi_df["SUPERSTRUCTURE_COND_059"].replace("N", 9).astype("int64")
+    )
+
+    # Correct deck condition
+    nbi_df["DECK_COND_058"] = nbi_df["DECK_COND_058"].replace("N", 10).astype("int64")
+
+    # Correct waterway evaluation
+    nbi_df["WATERWAY_EVAL_071"] = (
+        nbi_df["WATERWAY_EVAL_071"].replace("N", 10).astype("int64")
+    )
+
+    # Correct fracture critical
+    nbi_df["FRACTURE_092A"] = nbi_df["FRACTURE_092A"].astype(str).str.strip()
+    nbi_df["FRACTURE_092A"] = (
+        nbi_df["FRACTURE_092A"].map({"N": 0, "Y24": 1}).astype("int64")
+    )
+
+    # # Create a table with the count of each unique value of scour per county
+    # scour_table = nbi_df.groupby("COUNTY_CODE_003")["SCOUR_CRITICAL_113"].value_counts()
+    # # change it so that the values are in columns
+    # scour_table = scour_table.unstack().fillna(0)
+    # # save to csv
+    # scour_table.to_csv(os.path.join(folder_path, "scour_table.csv"))
+
+    # Correct scour critical
+    nbi_df["SCOUR_CRITICAL_113"] = (
+        nbi_df["SCOUR_CRITICAL_113"]
+        .replace(
+            {
+                "N": 10,
+                "U": 0,
+                "T": 10,
+                "6": 0,
+            }
+        )
+        .astype("int64")
+    )
+
+    if verbose:
+        print(nbi_df.dtypes)
+
+    # Fill missing values
+    if verbose:
+        print(
+            "There are {} rows with missing values".format(
+                len(nbi_df[nbi_df.isnull().any(axis=1)])
+            )
+        )
+        print(
+            "These columns have nans \n",
+            nbi_df.isnull().sum()[nbi_df.isnull().sum() > 0],
+        )
+
+    nbi_df["INVENTORY_RATING_066"] = nbi_df["INVENTORY_RATING_066"].fillna(0)
+    nbi_df["PERCENT_ADT_TRUCK_109"] = nbi_df["PERCENT_ADT_TRUCK_109"].fillna(0)
+
+    # ====== Add subsidence susceptibility and monitoring availability ======
+    subsidence_and_monitoring_df = pd.read_csv(subsidence_and_monitoring_csv)
+    nbi_df["displacement_susceptibility"] = subsidence_and_monitoring_df["max_displ"]
+    # count nans
+    print(
+        "There are {} rows with missing values in displacement susceptibility".format(
+            len(nbi_df[nbi_df["displacement_susceptibility"].isnull()])
+        )
+    )
+    # fill nans with 0
+    nbi_df["displacement_susceptibility"] = nbi_df[
+        "displacement_susceptibility"
+    ].fillna(30)
+    # Take absolute value
+    nbi_df["displacement_susceptibility"] = nbi_df["displacement_susceptibility"].abs()
+
+    # Add monitoring availability
+    nbi_df["monitoring_availability"] = subsidence_and_monitoring_df["Monitoring"]
+
+    if verbose:
+        print(
+            "There are {} rows with missing values".format(
+                len(nbi_df[nbi_df.isnull().any(axis=1)])
+            )
+        )
+        print(
+            "These columns have nans \n",
+            nbi_df.isnull().sum()[nbi_df.isnull().sum() > 0],
+        )
+
+    return nbi_df
+
+
+def run_pca_analysis(
+    nbi_df,
+    ADT_THRESHOLD=25000,
+    DETOUR_THRESHOLD_MILES=15,
+    WATERWAY_EVAL_THRESHOLD=3,
+    SCOUR_CRITICAL_THRESHOLD=3,
+    DISPLACEMENT_THRESHOLD=10,
+    n_components_retained=4,
+    pca_type="standard",
+    verbose=True,
+    capping=True,
+    skew_threshold=9999,
+    dynamic_components_retention=False,
+    variance_threshold=0.8,
+    aggregation_method="simplified",
+    return_county_data=False,
+    mahalanobis_threshold=97.5,
+    drop_indicator="none",
+):
+    """
+    Run PCA analysis with given parameters and return the final weights and communalities.
+
+    Parameters
+    ----------
+    nbi_df : pd.DataFrame
+        Preprocessed NBI data
+    ADT_THRESHOLD : float
+        Average Daily Traffic threshold
+    DETOUR_THRESHOLD_MILES : float
+        Detour length threshold in miles
+    WATERWAY_EVAL_THRESHOLD : int
+        Waterway evaluation threshold
+    SCOUR_CRITICAL_THRESHOLD : int
+        Scour critical rating threshold
+    DISPLACEMENT_THRESHOLD : float
+        Displacement susceptibility threshold
+    n_components_retained : int
+        Number of components to retain for factor analysis
+    pca_type : str
+        Type of PCA to use ("standard" or "robust")
+    verbose : bool
+        Whether to generate plots and print statements
+    capping : bool
+        Whether to cap data
+    skew_threshold : float
+        Skewness threshold for Yeo-Johnson transformation (set it to a very high number if don't want to transform)
+    dynamic_components_retention : bool
+        Whether to determine number of components to retain based on variance threshold
+    variance_threshold : float
+        Variance threshold to determine number of components to retain
+    weighting_method : str
+        Method to calculate weights ("simplified" or "complex")
+    return_county_data : bool, optional (default=False)
+        Whether to return the county-level data instead of the weights
+    mahalanobis_threshold : float
+        Threshold percentile for Mahalanobis distance calculation
+    drop_indicator : str
+        Whether to drop one of the sub-indicators (required for Monte-Carlo)
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame containing either final weights and communalities or county-level data
+    """
+    # Convert detour threshold to km
+    DETOUR_THRESHOLD_KM = DETOUR_THRESHOLD_MILES * 1.60934
+
+    # Print all parameters used in this run
+    if verbose:
+        print("Parameters used in this run:")
+        print(f"ADT_THRESHOLD: {ADT_THRESHOLD}")
+        print(f"DETOUR_THRESHOLD_MILES: {DETOUR_THRESHOLD_MILES}")
+        print(f"WATERWAY_EVAL_THRESHOLD: {WATERWAY_EVAL_THRESHOLD}")
+        print(f"SCOUR_CRITICAL_THRESHOLD: {SCOUR_CRITICAL_THRESHOLD}")
+        print(f"DISPLACEMENT_THRESHOLD: {DISPLACEMENT_THRESHOLD}")
+        print("ADTT_THRESHOLD: {}".format(ADTT_THRESHOLD))
+        print(f"CONDITION_RATING_THRESHOLD: {CONDITION_RATING_THRESHOLD}")
+        print(f"DECK_CONDITION_THRESHOLD: {DECK_CONDITION_THRESHOLD}")
+        print(f"INVENTORY_RATING_THRESHOLD: {INVENTORY_RATING_THRESHOLD}")
+        print(f"MONITORING_AVAILABILITY_THRESHOLD: {MONITORING_AVAILABILITY_THRESHOLD}")
+        print(f"INSPECTION_FREQ_THRESHOLD: {INSPECTION_FREQ_THRESHOLD}")
+        print(
+            f"MONTHS_TILL_NEXT_INSPECTION_THRESHOLD: {MONTHS_TILL_NEXT_INSPECTION_THRESHOLD}"
+        )
+        print(f"n_components_retained: {n_components_retained}")
+        print(f"pca_type: {pca_type}")
+        print(f"verbose: {verbose}")
+        print(f"capping: {capping}")
+        print(f"skew_threshold: {skew_threshold}")
+        print(f"dynamic_components_retention: {dynamic_components_retention}")
+        print(f"variance_threshold: {variance_threshold}")
+        print(f"aggregation_method: {aggregation_method}")
+        print(f"mahalanobis_threshold: {mahalanobis_threshold}")
+
+    # ====== Calculate derivative statistics ======
+    # Calculate replacement cost based on highway system
+    nbi_df.loc[:, "REPLACEMENT_COST"] = nbi_df["DECK_AREA"] * nbi_df[
+        "HIGHWAY_SYSTEM_104"
+    ].apply(
+        lambda x: replacement_cost_NHS_sqm if x == 1 else replacement_cost_non_NHS_sqm
+    )
+
+    # Divide replacement cost by GDP to standardise on the county level
+    nbi_df.loc[:, "REPLACEMENT_COST_SHARE_GDP"] = (
+        nbi_df["REPLACEMENT_COST"] / nbi_df["GDP2023"] * 100
+    )
+
+    # Calculate time till next inspection
+    # Date of inspection is given as MYY, convert to months since last inspection assuming it is Jan 2024
+    date_str = nbi_df["DATE_OF_INSPECT_090"].astype(str).str.zfill(4)
+    month = date_str.str[:-2].astype(int)
+    year = 2000 + date_str.str[-2:].astype(int)
+    inspection_dates = pd.to_datetime(
+        year.astype(str) + "-" + month.astype(str) + "-01"
+    )
+
+    nbi_df["Months_since_inspection"] = (
+        (reference_date - inspection_dates).dt.total_seconds() / (60 * 60 * 24 * 30.44)
+    ).astype(int)
+
+    nbi_df.loc[:, "Months_till_next_inspection"] = (
+        nbi_df["INSPECT_FREQ_MONTHS_091"] - nbi_df["Months_since_inspection"]
+    )
+
+    # ====== Create county-level dataset ======
+    # Calculate exposure metrics
+    nbi_df["high_ADT"] = nbi_df["ADT_029"].apply(
+        lambda x: 1 if x > ADT_THRESHOLD else 0
+    )
+    nbi_df["high_ADTT"] = nbi_df["PERCENT_ADT_TRUCK_109"].apply(
+        lambda x: 1 if x > ADTT_THRESHOLD * x else 0
+    )
+    nbi_df["high_traffic_load"] = nbi_df[["high_ADT", "high_ADTT"]].max(axis=1)
+    high_traffic_load = nbi_df.groupby("COUNTY_CODE_003")["high_traffic_load"].mean()
+
+    # Calculate strategic importance
+    strategic_importance = nbi_df.groupby("COUNTY_CODE_003")[
+        "HIGHWAY_SYSTEM_104"
+    ].mean()
+
+    # Calculate detour impact
+    nbi_df["long_detour"] = nbi_df["DETOUR_KILOS_019"].apply(
+        lambda x: 1 if x > DETOUR_THRESHOLD_KM else 0
+    )
+    long_detour = nbi_df.groupby("COUNTY_CODE_003")["long_detour"].mean()
+
+    # Calculate sensitivity metrics
+    nbi_df["lowest_rating"] = nbi_df[
+        ["SUPERSTRUCTURE_COND_059", "SUBSTRUCTURE_COND_060"]
+    ].min(axis=1)
+    nbi_df["structurally_deficient"] = nbi_df["lowest_rating"].apply(
+        lambda x: 1 if x <= CONDITION_RATING_THRESHOLD else 0
+    )
+    nbi_df["structural_vulnerability"] = nbi_df[
+        ["structurally_deficient", "FRACTURE_092A"]
+    ].max(axis=1)
+    structural_vulnerability = nbi_df.groupby("COUNTY_CODE_003")[
+        "structural_vulnerability"
+    ].mean()
+
+    # Calculate natural hazard vulnerability
+    nbi_df["overtopping"] = nbi_df["WATERWAY_EVAL_071"].apply(
+        lambda x: 1 if x <= WATERWAY_EVAL_THRESHOLD else 0
+    )
+    nbi_df["scour"] = nbi_df["SCOUR_CRITICAL_113"].apply(
+        lambda x: 1 if x <= SCOUR_CRITICAL_THRESHOLD else 0
+    )
+    nbi_df["subsidence"] = nbi_df["displacement_susceptibility"].apply(
+        lambda x: 1 if x >= DISPLACEMENT_THRESHOLD else 0
+    )
+    nbi_df["natural_hazard_vulnerability"] = nbi_df[
+        ["overtopping", "scour", "subsidence"]
+    ].max(axis=1)
+    natural_hazard_vulnerability = nbi_df.groupby("COUNTY_CODE_003")[
+        "natural_hazard_vulnerability"
+    ].mean()
+
+    # Calculate load capacity issues
+    nbi_df["poor_deck"] = nbi_df["DECK_COND_058"].apply(
+        lambda x: 1 if x <= DECK_CONDITION_THRESHOLD else 0
+    )
+    nbi_df["poor_inventory"] = nbi_df["INVENTORY_RATING_066"].apply(
+        lambda x: 1 if x <= INVENTORY_RATING_THRESHOLD else 0
+    )
+    nbi_df["load_capacity_issues"] = nbi_df[["poor_deck", "poor_inventory"]].max(axis=1)
+    load_capacity_issues = nbi_df.groupby("COUNTY_CODE_003")[
+        "load_capacity_issues"
+    ].mean()
+
+    # Calculate adaptive capacity metrics
+    nbi_df["brdgs_with_no_monitoring"] = nbi_df["monitoring_availability"].apply(
+        lambda x: 1 if x <= MONITORING_AVAILABILITY_THRESHOLD else 0
+    )
+    brdgs_with_no_monitoring = nbi_df.groupby("COUNTY_CODE_003")[
+        "brdgs_with_no_monitoring"
+    ].mean()
+
+    nbi_df["overdue_monitoring"] = nbi_df["Months_till_next_inspection"].apply(
+        lambda x: 1 if x < MONTHS_TILL_NEXT_INSPECTION_THRESHOLD else 0
+    )
+    nbi_df["frequent_monitoring"] = nbi_df["INSPECT_FREQ_MONTHS_091"].apply(
+        lambda x: 1 if x < INSPECTION_FREQ_THRESHOLD else 0
+    )
+    nbi_df["inspection_frequency_issues"] = nbi_df[
+        ["overdue_monitoring", "frequent_monitoring"]
+    ].max(axis=1)
+    inspection_frequency_issues = nbi_df.groupby("COUNTY_CODE_003")[
+        "inspection_frequency_issues"
+    ].mean()
+
+    # Calculate replacement cost share for poor bridges
+    nbi_df["poor_bridge"] = (
+        nbi_df[["SUPERSTRUCTURE_COND_059", "SUBSTRUCTURE_COND_060", "DECK_COND_058"]]
+        .min(axis=1)
+        .apply(lambda x: 1 if x <= 4 else 0)
+    )
+    replacement_cost_share_GDP = (
+        nbi_df[nbi_df["poor_bridge"] == 1]
+        .groupby("COUNTY_CODE_003")["REPLACEMENT_COST"]
+        .sum()
+        / nbi_df.groupby("COUNTY_CODE_003")["GDP2023"].first()
+    )
+
+    # Create county-level DataFrame
+    county_level_df = pd.concat(
+        [
+            high_traffic_load,
+            strategic_importance,
+            long_detour,
+            structural_vulnerability,
+            load_capacity_issues,
+            natural_hazard_vulnerability,
+            inspection_frequency_issues,
+            replacement_cost_share_GDP,
+            brdgs_with_no_monitoring,
+        ],
+        axis=1,
+    )
+    county_level_df.columns = [
+        "high_traffic_load",
+        "strategic_importance",
+        "long_detour",
+        "structural_vulnerability",
+        "load_capacity_issues",
+        "natural_hazard_vulnerability",
+        "inspection_frequency_issues",
+        "replacement_cost_share_GDP",
+        "brdgs_with_no_monitoring",
+    ]
+
+    # Drop indicator if specified
+    if drop_indicator != "none" and drop_indicator in county_level_df.columns:
+        if verbose:
+            print(f"Dropping indicator: {drop_indicator}")
+        county_level_df = county_level_df.drop(columns=[drop_indicator])
+
+    if verbose:
+        county_level_df.to_csv(os.path.join(results_path, "county_level_df.csv"))
+
+    # Prepare for PCA
+    nbi_df = county_level_df.copy()
+    nbi_df.reset_index(inplace=True)
+    nbi_df.drop(columns="COUNTY_CODE_003", inplace=True)
+
+    # ====== Data preprocessing for PCA ======
+
+    if verbose:
+        # Check data suitability
+        kmo_all, kmo_model = calculate_kmo(nbi_df)
+        chi_square_value, p_value = calculate_bartlett_sphericity(nbi_df)
+        print(f"Original data :KMO: {kmo_model}, Bartlett's Test p-value: {p_value}")
+
+        # Generate diagnostic plots
+        plot_distributions(
+            nbi_df, plot_type="both", output_path=os.path.join(plots_path, "distributions")
+        )
+        plot_correlation_matrix(
+            nbi_df, output_path=os.path.join(plots_path, "correlation_matrix.jpg")
+        )
+        create_data_characteristics(
+            nbi_df,
+            output_path=os.path.join(results_path, "data_characteristics.html"),
+            verbose=verbose,
+        )
+        sns.pairplot(nbi_df)
+        plt.savefig(
+            os.path.join(plots_path, "pairplot_original_data.jpg"),
+            dpi=dpi_pairplot,
+            bbox_inches="tight",
+        )
+        plt.close()
+
+        plot_county_scatter_matrix(
+            nbi_df,
+            save_path=os.path.join(plots_path, "scatter_plot_3x3_original_data.jpg"),
+            highlight_outliers=True,
+            mark_multivariate_outliers=True,
+            mahalanobis_threshold=None,
+            robust_mahalanobis=True,
+        )
+
+    # Calculate Robust Mahalanobis distance and remove observations above threshold percentile
+    try:
+        # Use the calculate_robust_mahalanobis function from pca_helper_functions
+        robust_mahalanobis_distances = calculate_robust_mahalanobis(
+            nbi_df.values, nbi_df.values
+        )
+
+        # Get count of outliers before filtering for accurate reporting
+        outliers_count = np.sum(
+            robust_mahalanobis_distances
+            > np.percentile(robust_mahalanobis_distances, mahalanobis_threshold)
+        )
+
+        # Determine threshold at specified percentile
+        threshold = np.percentile(robust_mahalanobis_distances, mahalanobis_threshold)
+
+        if verbose:
+            print(
+                f"Robust Mahalanobis distance threshold ({mahalanobis_threshold} percentile): {threshold:.2f}"
+            )
+            print(f"Number of observations above threshold: {outliers_count}")
+
+        # Filter observations
+        nbi_df = nbi_df[robust_mahalanobis_distances <= threshold].reset_index(
+            drop=True
+        )
+
+        if verbose:
+            print(
+                f"Removed {outliers_count} observations based on Robust Mahalanobis distance"
+            )
+
+    except Exception as e:
+        if verbose:
+            print(
+                f"Warning: Could not calculate robust Mahalanobis distances: {str(e)}"
+            )
+
+    if verbose:
+        # Check data suitability
+        kmo_all, kmo_model = calculate_kmo(nbi_df)
+        chi_square_value, p_value = calculate_bartlett_sphericity(nbi_df)
+        print(
+            f"Data after Mahalanobis-based outlier removal: KMO: {kmo_model}, Bartlett's Test p-value: {p_value}"
+        )
+
+    # Variables to store metadata from preprocessing
+    cap_bounds = None
+    transformer_info = None
+
+    # Handle outliers for standard PCA
+    if pca_type == "standard":
+        # Print number of outliers above max and below min for each sub-indicator
+        nbi_df_outliers = nbi_df.copy()
+        for col in nbi_df.columns:
+            Q1 = nbi_df[col].quantile(0.25)
+            Q3 = nbi_df[col].quantile(0.75)
+            IQR = Q3 - Q1
+            nbi_df_outliers[col + "_below_outliers"] = nbi_df[col] < (Q1 - 1.5 * IQR)
+            nbi_df_outliers[col + "_above_outliers"] = nbi_df[col] > (Q3 + 1.5 * IQR)
+
+        if verbose:
+            # # Generate a plot for variable that highlight outliers using IQR
+            # plt.figure(figsize=(8, 6))
+            # # sns.boxplot(data=nbi_df, orient="h")
+            # sns.boxplot(data=nbi_df.melt(), x="value", y="variable", orient="h")
+            # plt.tight_layout()
+            # plt.savefig(plots_path + "/box_plot_data.jpg", dpi=600, bbox_inches="tight")
+            # plt.close()
+            # Print count of outliers
+            print(nbi_df_outliers.filter(like="_outliers").sum())
+
+        if capping:
+            # Use the cap_outliers function and capture the bounds
+
+            nbi_df, cap_bounds = cap_outliers(
+                nbi_df, iqr_multiplier=1.5, verbose=verbose, return_bounds=True
+            )
+
+            if verbose:
+                kmo_all, kmo_model = calculate_kmo(nbi_df)
+                chi_square_value, p_value = calculate_bartlett_sphericity(nbi_df)
+                print(
+                    f"Capped data: KMO: {kmo_model}, Bartlett's Test p-value: {p_value}"
+                )
+
+                plot_distributions(
+                    nbi_df,
+                    plot_type="both",
+                    output_path=plots_path + "/capped_distributions",
+                )
+                plot_correlation_matrix(
+                    nbi_df,
+                    output_path=plots_path + "/correlation_matrix_capped.jpg",
+                    dpi=300,
+                )
+                create_data_characteristics(
+                    nbi_df,
+                    output_path=os.path.join(
+                        results_path, "data_characteristics_capped.html"
+                    ),
+                    verbose=verbose,
+                )
+                sns.pairplot(nbi_df)
+                plt.savefig(
+                    os.path.join(plots_path, "pairplot_capped_data.jpg"),
+                    dpi=dpi_pairplot,
+                    bbox_inches="tight",
+                )
+                plt.close()
+
+                plot_county_scatter_matrix(
+                    nbi_df,
+                    save_path=plots_path + "/scatter_plot_3x3_capped_data.jpg",
+                    highlight_outliers=True,
+                    mark_multivariate_outliers=True,
+                    mahalanobis_threshold=None,
+                    robust_mahalanobis=True,
+                )
+
+    # Handle skewness for standard PCA
+    if pca_type == "standard":
+        # Use transform_skewed_variables and capture the transformer info
+        nbi_df, transformer_info = transform_skewed_variables(
+            nbi_df,
+            skew_threshold=skew_threshold,
+            verbose=verbose,
+            return_transformer=True,
+        )
+
+        if verbose:
+            kmo_all, kmo_model = calculate_kmo(nbi_df)
+            chi_square_value, p_value = calculate_bartlett_sphericity(nbi_df)
+            print(
+                f"Pre-processed data :KMO: {kmo_model}, Bartlett's Test p-value: {p_value}"
+            )
+
+            plot_distributions(
+                nbi_df,
+                plot_type="both",
+                output_path=os.path.join(plots_path, "preprocessed_distributions"),
+            )
+            plot_correlation_matrix(
+                nbi_df,
+                output_path=os.path.join(plots_path, "correlation_matrix_preprocessed.jpg"),
+                dpi=dpi_pairplot,
+            )
+            create_data_characteristics(
+                nbi_df,
+                output_path=os.path.join(
+                    results_path, "data_characteristics_preprocessed.html"
+                ),
+                verbose=verbose,
+            )
+            sns.pairplot(nbi_df)
+            plt.savefig(
+                plots_path + "/pairplot_preprocessed_data.jpg",
+                dpi=300,
+                bbox_inches="tight",
+            )
+            plt.close()
+
+            plot_county_scatter_matrix(
+                nbi_df,
+                save_path=os.path.join(plots_path, "scatter_plot_3x3_preprocessed_data.jpg"),
+                highlight_outliers=True,
+                mark_multivariate_outliers=True,
+                mahalanobis_threshold=None,
+                robust_mahalanobis=True,
+            )
+
+    # ====== Data scaling ======
+
+    # Scale the data, but ensure outliers don't influence the scaling parameters
+    scaled_df, scaler_params = scale_data(nbi_df, method=pca_type, return_params=True)
+
+    kmo_all, kmo_model = calculate_kmo(scaled_df)
+    chi_square_value, p_value = calculate_bartlett_sphericity(scaled_df)
+    if kmo_model < 0.75:
+        print(f"Scaled data :KMO: {kmo_model}, Bartlett's Test p-value: {p_value}")
+        print(
+            "Warning: KMO value is below 0.75, indicating that the data may not be suitable for PCA."
+        )
+        # print all parameters
+        print("Parameters used in this run:")
+        print(f"ADT_THRESHOLD: {ADT_THRESHOLD}")
+        print(f"DETOUR_THRESHOLD_MILES: {DETOUR_THRESHOLD_MILES}")
+        print(f"WATERWAY_EVAL_THRESHOLD: {WATERWAY_EVAL_THRESHOLD}")
+        print(f"SCOUR_CRITICAL_THRESHOLD: {SCOUR_CRITICAL_THRESHOLD}")
+        print(f"DISPLACEMENT_THRESHOLD: {DISPLACEMENT_THRESHOLD}")
+        print("ADTT_THRESHOLD: {}".format(ADTT_THRESHOLD))
+        print(f"CONDITION_RATING_THRESHOLD: {CONDITION_RATING_THRESHOLD}")
+        print(f"DECK_CONDITION_THRESHOLD: {DECK_CONDITION_THRESHOLD}")
+        print(f"INVENTORY_RATING_THRESHOLD: {INVENTORY_RATING_THRESHOLD}")
+        print(f"MONITORING_AVAILABILITY_THRESHOLD: {MONITORING_AVAILABILITY_THRESHOLD}")
+        print(f"INSPECTION_FREQ_THRESHOLD: {INSPECTION_FREQ_THRESHOLD}")
+        print(
+            f"MONTHS_TILL_NEXT_INSPECTION_THRESHOLD: {MONTHS_TILL_NEXT_INSPECTION_THRESHOLD}"
+        )
+        print(f"n_components_retained: {n_components_retained}")
+        print(f"pca_type: {pca_type}")
+        print(f"verbose: {verbose}")
+        print(f"capping: {capping}")
+        print(f"skew_threshold: {skew_threshold}")
+        print(f"dynamic_components_retention: {dynamic_components_retention}")
+        print(f"variance_threshold: {variance_threshold}")
+        print(f"aggregation_method: {aggregation_method}")
+        print(f"mahalanobis_threshold: {mahalanobis_threshold}")
+
+    if verbose:
+        scaled_df.to_csv(os.path.join(results_path, "county_scaled.csv"), index=False)
+
+        kmo_all, kmo_model = calculate_kmo(scaled_df)
+        chi_square_value, p_value = calculate_bartlett_sphericity(scaled_df)
+        print(f"Scaled data :KMO: {kmo_model}, Bartlett's Test p-value: {p_value}")
+
+        plot_distributions(
+            nbi_df, plot_type="both", output_path=os.path.join(plots_path, "scaled_distributions")
+        )
+        plot_correlation_matrix(
+            nbi_df, output_path=os.path.join(plots_path, "correlation_matrix_scaled.jpg")
+        )
+        create_data_characteristics(
+            scaled_df,
+            output_path=os.path.join(results_path, "data_characteristics_scaled.html"),
+            verbose=verbose,
+        )
+
+        # # Create box plots
+        # plt.figure(figsize=(8, 6))
+        # # sns.boxplot(data=scaled_df, orient="h")
+        # sns.boxplot(data=scaled_df.melt(), x="value", y="variable", orient="h")
+        # plt.tight_layout()
+        # plt.savefig(
+        #     plots_path + "/box_plot_data_scaled.jpg", dpi=600, bbox_inches="tight"
+        # )
+        # plt.xlim(-3, 3)
+        # plt.savefig(
+        #     plots_path + "/box_plot_data_scaled_zoomed.jpg",
+        #     dpi=600,
+        #     bbox_inches="tight",
+        # )
+        # plt.close()
+
+        # Plot covariance matrix
+        cov = scaled_df.cov()
+        mask_cov = np.triu(np.ones_like(cov, dtype=bool), k=1)
+        fig, ax = plt.subplots(figsize=figsize_heatmap)
+        sns.heatmap(
+            cov,
+            mask=mask_cov,
+            annot=True,
+            cmap="coolwarm",
+            fmt=".2f",
+            ax=ax,
+            cbar_kws={"shrink": 0.5},
+            vmax=1,
+            vmin=-1,
+        )
+        plt.tight_layout()
+        plt.savefig(plots_path + "/covariance_matrix.jpg", dpi=600, bbox_inches="tight")
+        plt.close()
+
+        sns.pairplot(scaled_df)
+        plt.savefig(
+            plots_path + "/pairplot_scaled_data.jpg", dpi=300, bbox_inches="tight"
+        )
+        plt.close()
+
+        plot_county_scatter_matrix(
+            nbi_df,
+            save_path=os.path.join(plots_path, "scatter_plot_3x3_scaled_data.jpg"),
+            highlight_outliers=True,
+            mark_multivariate_outliers=True,
+            mahalanobis_threshold=None,
+            robust_mahalanobis=True,
+        )
+
+    # ==== Run PCA ====
+    if pca_type == "standard":
+        # Fit PCA, X_PCA will contain the transformed data
+        # so that each row is a sample and each column is a PC
+        # This is called scores in the PCA context
+        pca = PCA(n_components=len(nbi_df.columns), random_state=42)
+        _ = pca.fit_transform(scaled_df)
+
+        # Create variables needed for rotation
+        loadings_all = pd.DataFrame(
+            pca.components_.T * np.sqrt(pca.explained_variance_)
+        )
+        explained_variance = pca.explained_variance_
+        explained_variance_ratio = pca.explained_variance_ratio_
+
+        if verbose:
+            print("Standard PCA:")
+            print("Eigenvalues (PC variance):")
+            print(pd.DataFrame(pca.explained_variance_))
+            print("\nTotal variance:")
+            print(pca.explained_variance_.sum())
+            print("\nExplained Variance Ratio:")
+            print(pd.DataFrame(pca.explained_variance_ratio_))
+            print("\nCumulative Explained Variance Ratio:")
+            print(pd.DataFrame(np.cumsum(pca.explained_variance_ratio_)))
+            print("\nComponent Matrix (eigenvectors):")
+            print(pd.DataFrame(pca.components_.T))
+            print("\nCheck if sum of sq of component matrix is 1:")
+            print(np.sum(pca.components_.T**2, axis=0))
+            print(
+                "Loadings (eigenvectors scaled by the square root of the eigenvalues)"
+            )
+            print(pd.DataFrame(pca.components_.T * np.sqrt(pca.explained_variance_)))
+            print("Check if sum of sq of loadings is var:")
+            print(
+                np.sum(
+                    (pca.components_.T * np.sqrt(pca.explained_variance_)) ** 2, axis=0
+                )
+            )
+
+            plot_variance(
+                pca, output_path=os.path.join(plots_path, "explained_variance_ratio.jpg")
+            )
+            create_explained_variance_table(
+                pca, output_path=os.path.join(results_path, "explained_variance.html")
+            )
+            plot_scree(pca, output_path=os.path.join(plots_path, "scree_plot.jpg"))
+
+            # Create a table with PCA components
+            _ = create_pca_components_table(
+                pca,
+                scaled_df,
+                output_path=os.path.join(results_path, "PCA_features_components.html"),
+            )
+
+    elif pca_type == "robust":
+        rpca = RobustPCA()
+        rpca.fit(
+            scaled_df,
+            k=len(nbi_df.columns),
+            kmax=len(nbi_df.columns),
+            alpha=0.5,
+            ndir=15000,
+            skew=True,
+        )
+        _ = rpca.scores_
+
+        loadings_all = pd.DataFrame(rpca.components_ * np.sqrt(rpca.eigenvalues_))
+        explained_variance = rpca.eigenvalues_
+        explained_variance_ratio = rpca.explained_variance_ratio_
+
+        if verbose:
+            print("Robust PCA:")
+            print(f"Number of outliers detected: {sum(rpca.outlier_flags_ == 0)}")
+            print(
+                f"The outliers consitute {sum(rpca.outlier_flags_ == 0) / len(rpca.outlier_flags_):.2%} of the data"
+            )
+            print("\nEigenvalues (PC variance):")
+            print(rpca.eigenvalues_)
+            print("\nTotal variance:")
+            print(rpca.eigenvalues_.sum())
+            print("\nExplained Variance Ratio:")
+            print(rpca.explained_variance_ratio_)
+            print("\nCumulative Explained Variance Ratio:")
+            print(rpca.explained_variance_ratio_.cumsum())
+            print("\nComponent Matrix (eigenvectors):")
+            print(rpca.components_)
+            print("\nCheck if sum of sq of component matrix is 1:")
+            print(np.sum(rpca.components_**2, axis=0))
+            print(
+                "Loadings (eigenvectors scaled by the square root of the eigenvalues)"
+            )
+            print(pd.DataFrame(rpca.components_ * np.sqrt(rpca.eigenvalues_)))
+            print("Check if sum of sq of loadings is var:")
+            print(np.sum((rpca.components_ * np.sqrt(rpca.eigenvalues_)) ** 2, axis=0))
+
+            rpca.plot_diagnostic(
+                plot_folder=plots_path, n_samples=len(nbi_df)
+            )
+            plot_variance(
+                rpca, output_path=os.path.join(plots_path, "explained_variance_ratio_rpca.jpg")
+            )
+            rpca.explained_variance_ = rpca.eigenvalues_.values
+            create_explained_variance_table(
+                rpca,
+                output_path=os.path.join(results_path, "explained_variance_rpca.html"),
+            )
+            plot_scree(rpca, output_path=plots_path + "/scree_plot_rpca.jpg")
+
+            # Create a table with PCA components
+            _ = create_pca_components_table(
+                rpca,
+                scaled_df,
+                output_path=os.path.join(
+                    results_path, "PCA_features_components_rpca.html"
+                ),
+            )
+
+            # Create a df with orginal data, scaled data, sd_, od_, outlier flags, and save to csv
+            # Add the outlier flags to the original data
+            nbi_df_rpca = nbi_df.copy()
+            nbi_df_rpca["outlier_flags"] = rpca.outlier_flags_
+            nbi_df_rpca["sd"] = rpca.sd_
+            nbi_df_rpca["od"] = rpca.od_
+            nbi_df_rpca_scaled = scaled_df.copy()
+            nbi_df_rpca_scaled["outlier_flags"] = rpca.outlier_flags_
+            nbi_df_rpca_scaled["sd"] = rpca.sd_
+            nbi_df_rpca_scaled["od"] = rpca.od_
+
+            nbi_df_rpca.to_csv(
+                os.path.join(results_path, "nbi_df_rpca.csv"), index=False
+            )
+            nbi_df_rpca_scaled.to_csv(
+                os.path.join(results_path, "nbi_df_rpca_scaled.csv"), index=False
+            )
+
+    # ==== Get the retained components ====
+
+    if dynamic_components_retention:
+        # Determine number of components to retain based on variance threshold
+        cumulative_variance = np.cumsum(pca.explained_variance_ratio_)
+        n_components_retained = np.argmax(cumulative_variance >= variance_threshold) + 1
+
+    if verbose:
+        print(f"{n_components_retained} components retained")
+
+    loadings = loadings_all.iloc[:, :n_components_retained]
+
+    if verbose:
+        print("Factor loadings for the retained components:")
+        print(loadings)
+
+    # === Perform varimax rotation ===
+    rotated_loadings = varimax_rotation(loadings.to_numpy())
+    if verbose:
+        print(rotated_loadings)
+
+        rotated_loadings_df = pd.DataFrame(rotated_loadings, index=nbi_df.columns)
+        rotated_loadings_df = rotated_loadings_df.round(2)
+
+        rotated_loadings_html = rotated_loadings_df.style.map(
+            lambda x: "background-color: yellow" if abs(x) > 0.5 else ""
+        )
+        rotated_loadings_html.format("{:.2f}").to_html(
+            os.path.join(results_path, "rotated_loadings.html")
+        )
+
+    # === Calculate communalities ===
+    # (proportion of variance explained for each variable)
+    communalities = np.sum(rotated_loadings**2, axis=1)
+    communalities_df = pd.DataFrame(
+        communalities,
+        index=nbi_df.columns.to_list(),
+        columns=["Communality"],
+    )
+    # add row with total communality
+    communalities_df.loc["TOTAL"] = communalities_df.sum()
+    communalities_df.loc["Total variation explained by the factors"] = (
+        communalities_df.loc["TOTAL"] / len(nbi_df.columns)
+    )
+
+    if verbose:
+        residual_correlations = pd.DataFrame(
+            np.corrcoef(scaled_df, rowvar=False)
+            - np.dot(rotated_loadings, rotated_loadings.T),
+            index=sub_indicator_names,
+            columns=sub_indicator_names,
+        )
+
+        # Add a plot
+        fig, ax = plt.subplots(figsize=figsize_residual)  # Create fig AND ax
+        # Mask for upper triangle (to hide values) but NOT the diagonal (k=1)
+        mask_upper = np.triu(np.ones_like(residual_correlations, dtype=bool), k=1)
+        sns.heatmap(
+            residual_correlations,
+            mask=mask_upper,  # Apply mask to hide upper triangle only
+            annot=True,
+            fmt=".2f",
+            cmap="coolwarm",
+            cbar_kws={"shrink": 0.5},
+            ax=ax,  # Pass ax to heatmap
+            vmin=-0.3,
+            vmax=0.3,
+            annot_kws={"fontsize": font_size},
+        )
+
+        # Now add bubbles for the upper triangle
+        # Mask for upper triangle (to show bubbles)
+        mask_upper = np.tril(np.ones_like(residual_correlations, dtype=bool))
+
+        # Get coordinates for all cells
+        xx, yy = np.meshgrid(
+            range(len(residual_correlations)), range(len(residual_correlations))
+        )
+
+        # Get x, y coordinates and values excluding masked cells
+        x = xx[~mask_upper]
+        y = yy[~mask_upper]
+        size = np.abs(residual_correlations.values[~mask_upper]) * 1000
+        colors = residual_correlations.values[~mask_upper]
+
+        # Plot bubbles
+        _ = ax.scatter(
+            x + 0.5,  # Center in cells
+            y + 0.5,  # Center in cells
+            s=size,
+            c=colors,
+            cmap="coolwarm",
+            vmin=-0.4,
+            vmax=0.4,
+            alpha=0.7,
+            edgecolors="black",
+            linewidths=0.5,
+        )
+
+        # Set labels and adjust layout
+        def split_label(label):
+            parts = label.capitalize().split()
+            if len(parts) > 1:
+                return parts[0] + "\n" + " ".join(parts[1:])
+            else:
+                return label
+
+        split_labels = [split_label(lbl) for lbl in residual_correlations.columns]
+        ax.set_xticks(np.arange(len(residual_correlations.columns)) + 0.5)
+        ax.set_yticks(np.arange(len(residual_correlations.index)) + 0.5)
+        ax.set_xticklabels(split_labels, fontsize=font_size)
+        ax.set_yticklabels(split_labels, fontsize=font_size)
+        for label in ax.get_xticklabels():
+            label.set_ha("right")
+        for label in ax.get_yticklabels():
+            label.set_ha("right")
+        ax.tick_params(axis="both", which="major", labelsize=font_size)
+        ax.set_xlabel(ax.get_xlabel(), fontsize=font_size + 2)
+        ax.set_ylabel(ax.get_ylabel(), fontsize=font_size + 2)
+        ax.set_title(ax.get_title(), fontsize=font_size + 4)
+        cbar = ax.collections[0].colorbar
+        cbar.ax.tick_params(labelsize=font_size)
+
+        # Add a note about bubbles
+        plt.figtext(
+            0.7,
+            0.97,
+            "Bubble size represents correlation strength",
+            ha="center",
+            fontsize=font_size,
+        )
+
+        plt.tight_layout()
+        plt.savefig(
+            plots_path + "/residual_correlations.jpg", dpi=600, bbox_inches="tight"
+        )
+        plt.close()
+
+        residual_correlations = residual_correlations.map(lambda x: f"{x:.3f}")
+        residual_correlations_html = residual_correlations.style.apply(
+            highlight_diagonal, axis=None
+        )
+        residual_correlations_html.to_html(
+            os.path.join(results_path, "residual_correlations.html")
+        )
+
+        print("\nCommunalities:")
+        print(communalities_df)
+        communalities_df.to_html(os.path.join(results_path, "communalities.html"))
+
+    # === Calculate variance explained by components ===
+    rotated_variance = np.sum(rotated_loadings**2, axis=0)
+    rotated_variance_ratio = rotated_variance / rotated_variance.sum()
+
+    # === Verify variance preservation ===
+    original_total_variance = explained_variance[:n_components_retained].sum()
+    rotated_total_variance = rotated_variance.sum()
+
+    if verbose:
+        print("\n=== Variance Preservation Verification ===")
+        print(f"Total variance before rotation: {original_total_variance:.4f}")
+        print(f"Total variance after rotation: {rotated_total_variance:.4f}")
+        print(
+            f"Difference: {abs(original_total_variance - rotated_total_variance):.6f}"
+        )
+
+        # Check if the difference is within an acceptable tolerance
+        if abs(original_total_variance - rotated_total_variance) < VARIANCE_TOLERANCE:
+            print("✓ Variance is preserved after rotation (within numerical tolerance)")
+        else:
+            print("⚠ Warning: Variance is not preserved after rotation!")
+            print("   This may indicate an issue with the rotation implementation.")
+
+    variance_df = pd.DataFrame(
+        {
+            "Original Variance": explained_variance[:n_components_retained],
+            "Original Variance Ratio": explained_variance_ratio[:n_components_retained],
+            "Rotated Variance": rotated_variance,
+            "Rotated Variance Ratio": rotated_variance_ratio,
+        }
+    )
+
+    variance_df.index.name = "Factor"
+    variance_df.index = [f"{i+1}" for i in range(len(variance_df))]
+    variance_df.loc["Total"] = variance_df.sum()
+    variance_df = variance_df.round(4)
+
+    if verbose:
+        variance_df.to_html(os.path.join(results_path, "variance_comparison.html"))
+        print("\nVariance Comparison:")
+        print(variance_df)
+
+    # ===== Weighting =====
+    squared_loadings = rotated_loadings**2
+
+    # Calculate proportion of total explained variance
+    total_explained = rotated_variance.sum()
+    explained_ratio = rotated_variance / total_explained
+
+    # Scale squared loadings to unity sum within each factor (column-wise)
+    scaled_squared = squared_loadings / squared_loadings.sum(axis=0)
+
+    rotated_loadings_df = pd.DataFrame(rotated_loadings, index=nbi_df.columns)
+    squared_loadings_df = pd.DataFrame(squared_loadings, index=nbi_df.columns)
+    scaled_squared_df = pd.DataFrame(scaled_squared, index=nbi_df.columns)
+
+    combined_df = pd.DataFrame(index=rotated_loadings_df.index)
+
+    for i in range(len(rotated_loadings_df.columns)):
+        combined_df[f"Load_{i+1}"] = rotated_loadings_df[i]
+
+    for i in range(len(scaled_squared_df.columns)):
+        combined_df[f"Load_sq_scld_{i+1}"] = scaled_squared_df[i]
+
+    combined_df = combined_df.round(2)
+
+    if verbose:
+        combined_df_html = combined_df.style.apply(
+            highlight_max, axis=1, subset=combined_df.columns[-4:]
+        ).format("{:.2f}")
+
+        combined_df_html.to_html(
+            os.path.join(results_path, "factor_loadings_weights.html")
+        )
+
+    _ = pd.DataFrame(
+        {"Explained_Variance": rotated_variance, "Explained_Ratio": explained_ratio}
+    )
+
+    if aggregation_method == "simplified":
+        # follows oecd 2008
+        # Group variables by their highest loading factor
+        groups = {}
+        for col in rotated_loadings_df.columns:
+            mask = squared_loadings_df.idxmax(axis=1) == col
+            variables = squared_loadings_df[mask].index
+            weights = scaled_squared_df.loc[variables, col]
+            groups[col] = pd.Series(weights)
+
+        # Make a table that has the max weight for each factor in the first column
+        # The corresponding explained variance in the second column
+        # And the product of those two in third
+
+        # Get max squared loadings and corresponding factor for each variable
+        max_factor_idx = scaled_squared_df.idxmax(axis=1)
+        max_squared_loadings = scaled_squared_df.max(axis=1)
+
+        final_weights_df = pd.DataFrame(
+            {
+                "Factor": max_factor_idx,
+                "Squared_factor_loading_scaled": max_squared_loadings,
+                "Explained_variance_ratio": [
+                    explained_ratio[factor] for factor in max_factor_idx
+                ],
+            }
+        )
+
+        final_weights_df["Intermediate_Weight"] = (
+            final_weights_df["Squared_factor_loading_scaled"]
+            * final_weights_df["Explained_variance_ratio"]
+        )
+
+        # Scale to sum to 1
+        final_weights_df["Final_Weight"] = (
+            final_weights_df["Intermediate_Weight"]
+            / final_weights_df["Intermediate_Weight"].sum()
+        )
+
+        if verbose:
+            final_weights_df.to_csv(
+                os.path.join(results_path, "final_weights.csv"), index=True
+            )
+
+        final_weights_df["Communality"] = communalities_df["Communality"]
+
+        # If requested, return the county data along with weights
+        if return_county_data:
+            # Get the full dataset including outliers - transform using the parameters learned from non-outlier data
+            full_county_df = county_level_df.copy()
+
+            # If we capped or transformed data, apply those same operations to the full dataset
+            if pca_type == "standard":
+                if capping and cap_bounds is not None:
+                    # Apply the same capping boundaries calculated from non-outlier data
+                    full_county_df = cap_outliers(
+                        full_county_df,
+                        iqr_multiplier=1.5,
+                        verbose=verbose,
+                        pre_calculated_bounds=cap_bounds,
+                    )
+
+                # Apply the same transformation parameters calculated from non-outlier data
+                if transformer_info is not None:
+                    # If transformation was applied, apply the transformation calculated for non-outlier data
+                    full_county_df = transform_skewed_variables(
+                        full_county_df,
+                        skew_threshold=skew_threshold,
+                        verbose=verbose,
+                        pre_fitted_transformer=transformer_info,
+                    )
+
+            # Scale the full dataset using parameters from non-outlier data
+            full_scaled_df = scale_data(
+                full_county_df, method=pca_type, params=scaler_params
+            )
+
+            if verbose:
+                full_scaled_df.to_csv(
+                    os.path.join(results_path, "full_county_scaled.csv"), index=True
+                )
+
+            return final_weights_df, full_scaled_df
+        else:
+            return final_weights_df
+    else:
+        # follows Nicoletti 2000
+        # Multiply each sub-indicator by factor weights and sum it up
+        # Then mulitply the sum for each factor by the rotated variance ratio
+        # Finally sum it all together
+        final_weights_df = combined_df.iloc[:, n_components_retained:]
+        final_weights_df.loc["Variance_ratio"] = rotated_variance_ratio
+        final_weights_df["Communality"] = communalities_df["Communality"]
+
+        if verbose:
+            final_weights_df.to_csv(
+                os.path.join(results_path, "final_weights.csv"), index=True
+            )
+
+        # If requested, return the county data along with weights
+        if return_county_data:
+            # Get the full dataset including outliers - transform using the parameters learned from non-outlier data
+            full_county_df = county_level_df.copy()
+
+            # If we capped or transformed data, apply those same operations to the full dataset
+            if pca_type == "standard":
+                if capping and cap_bounds is not None:
+                    # Apply the same capping boundaries calculated from non-outlier data
+                    full_county_df = cap_outliers(
+                        full_county_df,
+                        iqr_multiplier=1.5,
+                        verbose=verbose,
+                        pre_calculated_bounds=cap_bounds,
+                    )
+
+                # Apply the same transformation parameters calculated from non-outlier data
+                if transformer_info is not None:
+                    # If transformation was applied, apply the transformation calculated for non-outlier data
+                    full_county_df = transform_skewed_variables(
+                        full_county_df,
+                        skew_threshold=skew_threshold,
+                        verbose=verbose,
+                        pre_fitted_transformer=transformer_info,
+                    )
+
+            # Scale the full dataset using parameters from non-outlier data
+            full_scaled_df = scale_data(
+                full_county_df, method=pca_type, params=scaler_params
+            )
+
+            if verbose:
+                full_scaled_df.to_csv(
+                    os.path.join(results_path, "full_county_scaled.csv"), index=True
+                )
+
+            return final_weights_df, full_scaled_df
+        else:
+            return final_weights_df
+
+
+if __name__ == "__main__":
+    nbi_df = preprocess_data(verbose=True)
+
+    final_weights_df, scaled_df = run_pca_analysis(
+        nbi_df,
+        verbose=True,
+        capping=True,
+        skew_threshold=1,
+        dynamic_components_retention=True,
+        variance_threshold=0.8,
+        aggregation_method="complex",
+        return_county_data=True,
+        mahalanobis_threshold=97.5,
+    )
+
+    scaled_df.to_csv(output_scaled_df_csv)
+    final_weights_df.to_csv(output_final_weights_df_csv)
+    # final_weights_df = final_weights_df.round(2)
+    # print("Final weights:")
+    # print(final_weights_df["Final_Weight"])
+    # print("\nCommunalities:")
+    # print(final_weights_df["Communality"])
+    # final_weights_df.to_html(os.path.join("/mnt/g/SOCIAL_PAPER", "final_weights.html"))

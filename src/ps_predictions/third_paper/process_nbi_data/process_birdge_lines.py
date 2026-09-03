@@ -1,0 +1,124 @@
+import glob
+import os
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+import matplotlib.pyplot as plt
+
+
+# Import all shp files in the folder and combine into one gdf
+folder_path = "/mnt/g/SOCIAL_PAPER/HPC_output"
+
+# Get all shp files in the folder matching the pattern
+shp_files = glob.glob(os.path.join(folder_path, "nbi_lines_*.shp"))
+
+# Read all shp files into a list of GeoDataFrames
+gdfs = [gpd.read_file(shp_file) for shp_file in shp_files]
+
+# Combine all GeoDataFrames into one
+gdf_lines_all = gpd.GeoDataFrame(pd.concat(gdfs, ignore_index=True))
+
+# Save the combined GeoDataFrame to a single shp file
+output_path = os.path.join(folder_path, "nbi_lines_combined.shp")
+gdf_lines_all.to_file(output_path)
+
+gdf_lines_all.crs = "EPSG:4326"
+
+gdf_lines_all.to_crs("EPSG:3395", inplace=True)
+
+gdf_lines_all["length"] = gdf_lines_all["geometry"].length
+
+print(f"Combined {len(gdfs)} GeoDataFrames into one and saved to {output_path}")
+
+# Plot histogram of line lengths
+bins = [0, 1, 10, 20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 30000]
+
+# hist, bin_edges = np.histogram(gdf_lines_all["length"], bins)  # make the histogram
+
+# fig, ax = plt.subplots()
+
+# # Plot the histogram heights against integers on the x axis
+# ax.bar(range(len(hist)), hist, width=1)
+
+# # Set the ticks to the middle of the bars
+# ax.set_xticks([0.5 + i for i, j in enumerate(hist)])
+
+# # Set the xticklabels to a string that tells us what the bin edges were
+# ax.set_xticklabels(["{} - {}".format(bins[i], bins[i + 1]) for i, j in enumerate(hist)])
+# plt.xlabel("Length")
+# plt.ylabel("Frequency")
+# plt.title("Histogram of Line Lengths")
+
+# plt.savefig(os.path.join(folder_path, "line_lengths_histogram.png"))
+
+
+# Create histograms for 'length' and 'Total Length'
+hist_length, bin_edges = np.histogram(gdf_lines_all["length"], bins)
+hist_total_length, _ = np.histogram(gdf_lines_all["Total Leng"], bins)
+
+# Create a figure and axis for the plot
+fig, ax = plt.subplots(figsize=(12, 6))
+
+# Plot the histogram heights against integers on the x axis
+bar_width = 0.4
+ax.bar(
+    np.arange(len(hist_length)) - bar_width / 2,
+    hist_length,
+    width=bar_width,
+    label="Length",
+)
+ax.bar(
+    np.arange(len(hist_total_length)) + bar_width / 2,
+    hist_total_length,
+    width=bar_width,
+    label="Total Length",
+)
+
+# Set the ticks to the middle of the bars
+ax.set_xticks(np.arange(len(hist_length)))
+
+# Set the xticklabels to a string that tells us what the bin edges were
+ax.set_xticklabels(
+    ["{} - {}".format(bins[i], bins[i + 1]) for i in range(len(hist_length))],
+    rotation=90,
+)
+
+# Add labels and title
+plt.xlabel("Length")
+plt.ylabel("Frequency")
+plt.title("Histogram of Line Lengths")
+
+# Add a legend
+plt.legend()
+
+# Save the plot
+plt.tight_layout()
+plt.savefig(os.path.join(folder_path, "line_lengths_histogram.png"))
+plt.close()
+
+
+# Plot a scatter plot that on the x has the Total Length and on the y has the difference between Total Length and length
+
+# Calculate the difference between Total Length and length
+gdf_lines_all["length_diff"] = gdf_lines_all["Total Leng"] - gdf_lines_all["length"]
+
+# Create a scatter plot
+fig, ax = plt.subplots(figsize=(12, 6))
+
+# Plot the scatter plot
+ax.scatter(gdf_lines_all["Total Leng"], gdf_lines_all["length_diff"], alpha=0.5)
+
+# Add labels and title
+plt.xlabel("Total Length")
+plt.ylabel("Total Length - Length")
+plt.title("Scatter Plot of Total Length vs. Difference")
+
+# Save the plot
+plt.tight_layout()
+plt.savefig(os.path.join(folder_path, "total_length_vs_difference.png"))
+
+plt.xlim(0, 1000)
+plt.ylim(-1000, 1000)
+plt.savefig(os.path.join(folder_path, "total_length_vs_difference_zoomed.png"))
+
+plt.close()

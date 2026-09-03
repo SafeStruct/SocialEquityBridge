@@ -1,0 +1,711 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+import matplotlib.patches as mpatches
+import matplotlib.colors as mcolors
+import pandas as pd
+
+
+def add_labels_to_map(
+    gdf,
+    label_column,
+    ax,
+    fontsize=6,
+    bbox_props=dict(facecolor="white", alpha=0.7, edgecolor="none", pad=1),
+):
+    """
+    Add labels to map at centroids of geometries.
+
+    Parameters:
+    -----------
+    gdf : GeoDataFrame
+        Input geodataframe with geometries
+    label_column : str
+        Column name containing labels to display
+    ax : matplotlib axes
+        Axes object to add labels to
+    fontsize : int
+        Font size for labels
+    bbox_props : dict
+        Properties for label background box
+    """
+    # Get county centroids
+    # centroids = gdf.geometry.centroid
+
+    # Add county labels
+    for _, row in gdf.iterrows():
+        centroid = row.geometry.centroid
+        x, y = centroid.x, centroid.y
+
+        ax.text(
+            x,
+            y,
+            row[label_column],
+            fontsize=fontsize,
+            ha="center",
+            va="center",
+            bbox=bbox_props,
+        )
+
+    return ax
+
+
+colors = [
+    "#FEFBE9",
+    "#FCF7D5",
+    "#F5F3C1",
+    "#EAF0B5",
+    "#DDECBF",
+    "#D0E7CA",
+    "#C2E3D2",
+    "#B5DDD8",
+    "#A8D8DC",
+    "#9BD2E1",
+    "#8DCBE4",
+    "#81C4E7",
+    "#7BBCE7",
+    "#7EB2E4",
+    "#88A5DD",
+    "#938BD2",
+    "#9B8AC4",
+    "#9D7DB2",
+    "#9A709E",
+    "#906388",
+    "#805770",
+    "#684957",
+    "#463533",
+    # "#999999",
+]
+colormap = LinearSegmentedColormap.from_list("colorblind_sequential", colors)
+
+
+# Create county code mapping
+county_codes = {
+    "Alameda": "ALA",
+    "Alpine": "ALP",
+    "Amador": "AMA",
+    "Butte": "BUT",
+    "Calaveras": "CAL",
+    "Colusa": "COL",
+    "Contra Costa": "CC",
+    "Del Norte": "DN",
+    "El Dorado": "ED",
+    "Fresno": "FRE",
+    "Glenn": "GLE",
+    "Humboldt": "HUM",
+    "Imperial": "IMP",
+    "Inyo": "INY",
+    "Kern": "KER",
+    "Kings": "KIN",
+    "Lake": "LAK",
+    "Lassen": "LAS",
+    "Los Angeles": "LA",
+    "Madera": "MAD",
+    "Marin": "MRN",
+    "Mariposa": "MPA",
+    "Mendocino": "MEN",
+    "Merced": "MER",
+    "Modoc": "MOD",
+    "Mono": "MNO",
+    "Monterey": "MON",
+    "Napa": "NAP",
+    "Nevada": "NEV",
+    "Orange": "ORA",
+    "Placer": "PLA",
+    "Plumas": "PLU",
+    "Riverside": "RIV",
+    "Sacramento": "SAC",
+    "San Benito": "SBT",
+    "San Bernardino": "SBD",
+    "San Diego": "SD",
+    "San Francisco": "SF",
+    "San Joaquin": "SJ",
+    "San Luis Obispo": "SLO",
+    "San Mateo": "SM",
+    "Santa Barbara": "SB",
+    "Santa Clara": "SCL",
+    "Santa Cruz": "SCR",
+    "Shasta": "SHA",
+    "Sierra": "SIE",
+    "Siskiyou": "SIS",
+    "Solano": "SOL",
+    "Sonoma": "SON",
+    "Stanislaus": "STA",
+    "Sutter": "SUT",
+    "Tehama": "TEH",
+    "Trinity": "TRI",
+    "Tulare": "TUL",
+    "Tuolumne": "TUO",
+    "Ventura": "VEN",
+    "Yolo": "YOL",
+    "Yuba": "YUB",
+}
+
+
+# Set up the color map
+# basic matrix layout
+categories_mat = np.array([["A3", "B3", "C3"], ["A2", "B2", "C2"], ["A1", "B1", "C1"]])
+# first col
+col_mats = [
+    np.array(
+        [
+            [
+                ["#64acbe", "#627f8c", "#574249"],
+                ["#b0d5df", "#ad9ea5", "#985356"],
+                ["#e8e8e8", "#e4acac", "#c85a5a"],
+            ]
+        ]
+    ),
+    np.array(
+        [
+            [
+                ["#be64ac", "#8c62aa", "#3b4994"],
+                ["#dfb0d6", "#a5add3", "#5698b9"],
+                ["#e8e8e8", "#ace4e4", "#5ac8c8"],
+            ]
+        ]
+    ),
+    np.array(
+        [
+            [
+                ["#73ae80", "#5a9178", "#2a5a5b"],
+                ["#b8d6be", "#90b2b3", "#567994"],
+                ["#e8e8e8", "#b5c0da", "#6c83b5"],
+            ]
+        ]
+    ),
+    np.array(
+        [
+            [
+                ["#9972af", "#976b82", "#804d36"],
+                ["#cbb8d7", "#c8ada0", "#af8e53"],
+                ["#e8e8e8", "#e4d9ac", "#c8b35a"],
+            ]
+        ]
+    ),
+]
+
+
+# Map colours
+# helper function for create_color_col
+def map_colors(value, col_matrix):
+    # find the corresponding color for the value in the color matrix
+    indices = np.where(categories_mat == value)
+    if len(indices[0]) > 0:
+        color = col_matrix[indices]
+        return color[0]
+
+    return None
+
+
+# function to create color column per race and poverty rate
+def create_color_col(df, columns, matrices):
+    """
+    Takes in df, column list, and list of color matrices
+    Create color column
+    """
+    for col, col_matrix in zip(columns, matrices):
+        new_col_name = col + "_color"
+        df[new_col_name] = df[col].apply(map_colors, args=(col_matrix,))
+
+
+# helper function to plot inset legend
+def plot_inset_legend(ax, color_matrix, x_label="X Label"):
+    """
+    Takes in axes from plot, color_matrix and optional x label arg
+    Maps colors to grid and labels accordingly
+    """
+    ax.set_aspect("equal", adjustable="box")
+    count = 0
+
+    for i in range(3):
+        for j in range(3):
+            color = mcolors.to_rgba(
+                color_matrix[2 - i][j]
+            )  # Invert the order of color_matrix
+            rect = mpatches.Rectangle((j, i), 1, 1, facecolor=color)
+            ax.add_patch(rect)
+            count += 1
+
+    # Set legend labels on the sides
+    ax.text(
+        -0.075,
+        0.1,
+        "Low",
+        ha="center",
+        va="center",
+        rotation=90,
+        transform=ax.transAxes,
+    )
+    ax.text(
+        -0.075,
+        0.9,
+        "High",
+        ha="center",
+        va="center",
+        rotation=90,
+        transform=ax.transAxes,
+    )
+    ax.text(0.1, -0.075, "Low", ha="center", va="center", transform=ax.transAxes)
+    ax.text(0.9, -0.075, "High", ha="center", va="center", transform=ax.transAxes)
+
+    ax.set_xlim([0, 3])
+    ax.set_ylim([0, 3])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel(x_label, labelpad=15)
+    ax.set_ylabel("Structural Vulnerability", labelpad=15)
+    ax.spines["top"].set_visible(True)
+    ax.spines["right"].set_visible(True)
+    ax.spines["bottom"].set_visible(True)
+    ax.spines["left"].set_visible(True)
+    ax.xaxis.set_tick_params(size=0)
+    ax.yaxis.set_tick_params(size=0)
+    ax.tick_params(axis="both", which="both", length=0)
+
+    # Draw arrow between "Low" and "High"
+    ax.annotate(
+        "",
+        xy=(-0.06, 0.25),
+        xycoords="axes fraction",
+        xytext=(-0.06, 0.75),
+        arrowprops=dict(arrowstyle="<-", lw=1.5),
+    )
+    ax.annotate(
+        "",
+        xy=(0.25, -0.06),
+        xycoords="axes fraction",
+        xytext=(0.75, -0.06),
+        arrowprops=dict(arrowstyle="<-", lw=1.5),
+    )
+
+    # Remove legend edge color
+    legend = ax.get_legend()
+    if legend is not None:
+        legend.set_edgecolor("none")
+
+
+def add_histogram_legend(
+    ax,
+    data,
+    column,
+    colormap,
+    norm=None,
+    position=[0.75, 0.05, 0.2, 0.4],
+    bins=10,
+    title="Value Distribution",
+    alpha=1,
+    fontsize_title=8,
+    fontsize_labels=7,
+    fontsize_ticks=6,
+    bar_edgecolor="black",
+    bar_linewidth=0.5,
+):
+    """
+    Add a histogram legend to a plot, colored according to the specified colormap.
+
+    Parameters:
+    -----------
+    ax : matplotlib.axes.Axes
+        The main axes to add the histogram to
+    data : pandas.DataFrame
+        DataFrame containing the data to plot
+    column : str
+        Column name in the DataFrame to plot as histogram
+    colormap : matplotlib.colors.Colormap
+        Colormap to use for coloring the histogram bins
+    norm : matplotlib.colors.Normalize, optional
+        Normalization for the colormap. If None, one will be created
+    position : list, optional
+        Position of the inset axes [x, y, width, height]
+    bins : int, optional
+        Number of bins for the histogram
+    title : str, optional
+        Title for the histogram
+    alpha : float, optional
+        Transparency of the histogram bars
+    fontsize_title : int, optional
+        Font size for the title
+    fontsize_labels : int, optional
+        Font size for the axis labels
+    fontsize_ticks : int, optional
+        Font size for the tick labels
+    bar_edgecolor : str, optional
+        Color of the histogram bar edges
+    bar_linewidth : float, optional
+        Width of the histogram bar edges
+
+    Returns:
+    --------
+    hist_ax : matplotlib.axes.Axes
+        The axes object for the histogram
+    """
+
+    # Create normalization if not provided
+    if norm is None:
+        vmin = data[column].min()
+        vmax = data[column].max()
+        norm = plt.Normalize(vmin=vmin, vmax=vmax)
+
+    # Create inset axes for histogram with transparent background
+    hist_ax = ax.inset_axes(position)
+    hist_ax.patch.set_alpha(0)  # Make background transparent
+
+    # Plot histogram with border/edge color
+    hist_data = data[column].dropna()
+    n, returned_bin_edges, patches = hist_ax.hist(
+        hist_data,
+        bins=bins,
+        alpha=alpha,
+        edgecolor=bar_edgecolor,
+        linewidth=bar_linewidth,
+        orientation="horizontal",
+    )
+
+    # Handle bin centres calculation based on input type
+    if isinstance(bins, (list, tuple, np.ndarray)):
+        # If bins were specified as edges, use the original bins for colour calculation
+        # bins_array = np.array(bins)
+        # bin_centers = 0.5 * (bins_array[:-1] + bins_array[1:])
+        y_min, y_max = bins[0], bins[-1]
+        n_bins = len(bins) - 1
+    else:
+        # If bins was an integer, use the returned bin edges
+        # bin_centers = 0.5 * (returned_bin_edges[:-1] + returned_bin_edges[1:])
+        y_min, y_max = returned_bin_edges[0], returned_bin_edges[-1]
+        n_bins = bins
+
+    # # Color bars to match discrete map classification
+    # if isinstance(bins, (list, tuple, np.ndarray)):
+    #     n_bins = len(bins) - 1  # Number of actual bins
+
+    #     # Assign colors exactly like GeoPandas does for discrete classification
+    #     for i, patch in enumerate(patches):
+    #         # Map bin index to colormap position (0 to 1)
+    #         color_position = i / (n_bins - 1) if n_bins > 1 else 0.5
+    #         color = colormap(color_position)
+    #         patch.set_facecolor(color)
+    # else:
+    #     # Fallback for integer bins (continuous approach)
+    #     for count, bin_center, patch in zip(n, bin_centers, patches):
+    #         color = colormap(norm(bin_center))
+    #         patch.set_facecolor(color)
+    for i, patch in enumerate(patches):
+        if i < n_bins:
+            # Direct color assignment from discrete colormap
+            color = colormap.colors[i]
+            # print(f"histogram bin {i}:", color)
+            patch.set_facecolor(color)
+
+    # # Add count labels to the right of each bar
+    # for i, (count, bin_center) in enumerate(zip(n, bin_centers)):
+    #     if count > 0:  # Only show label if there's a count
+    #         hist_ax.text(
+    #             count
+    #             + max(n) * 0.02,  # X position: slightly to the right of the bar end
+    #             bin_center,  # Y position: centre of the bin
+    #             f"{int(count)}",  # Text: the count value
+    #             va="center",  # Vertical alignment: centre
+    #             ha="left",  # Horizontal alignment: left
+    #             fontsize=fontsize_ticks,  # Use the same font size as ticks
+    #             color="black",  # Text colour
+    #         )
+
+    # Style the histogram
+    hist_ax.set_title(title, fontsize=fontsize_title)
+    hist_ax.set_ylabel(column, fontsize=fontsize_labels)
+    hist_ax.set_xlabel("Frequency", fontsize=fontsize_labels)
+    hist_ax.tick_params(axis="both", which="major", labelsize=fontsize_ticks)
+    hist_ax.spines["top"].set_visible(False)
+    hist_ax.spines["right"].set_visible(False)
+
+    # Set tick colors to match the axis spines (optional)
+    hist_ax.tick_params(axis="x", colors="black")
+    hist_ax.tick_params(axis="y", colors="black")
+
+    # Ensure y-axis is arranged from bottom (low) to top (high)
+    hist_ax.set_ylim(y_min, y_max)
+
+    # Set y-axis ticks to show bin border values
+    if isinstance(bins, (list, tuple, np.ndarray)):
+        # Use the original bin edges
+        hist_ax.set_yticks(bins)
+    else:
+        # Use the returned bin edges from histogram
+        hist_ax.set_yticks(returned_bin_edges)
+
+    return hist_ax
+
+
+def plot_inset_legend_with_histograms(
+    ax,
+    color_matrix,
+    data,
+    x_var,
+    y_var,
+    x_label_legend="X Label",
+    y_label_legend="Y Label",
+    bar_edgecolor="black",
+    bar_linewidth=0.5,
+    hist_alpha=0.7,
+    fontsize_ticks=6,
+    fontsize_counts=9,
+):
+    """
+    Takes in axes from plot, color_matrix and data to create a bivariate legend
+    with histograms showing the distribution of categories on top and right sides.
+    Also annotates each grid cell with the count of data points.
+    """
+    # Create the main color grid legend
+    ax.set_aspect("equal", adjustable="box")
+
+    # Calculate counts for each combination using crosstab
+    # Note: need to convert back to string categories for crosstab
+    crosstab = pd.crosstab(data[y_var], data[x_var])
+
+    # Create the grid and add count annotations
+    for i in range(3):
+        for j in range(3):
+            # Get the color for this cell
+            color = mcolors.to_rgba(color_matrix[2 - i][j])
+            # Add the colored rectangle
+            rect = mpatches.Rectangle((j, i), 1, 1, facecolor=color)
+            ax.add_patch(rect)
+
+            # Get the count for this cell
+            # Need to map i,j to the appropriate row,col in crosstab
+            # For y_var, we need to convert i (0,1,2) to row labels (C,B,A due to inversion)
+            # For x_var, we need to convert j (0,1,2) to column labels (1,2,3)
+            y_label = chr(65 + i)  # 'A','B','C'
+            x_label = str(j + 1)  # '1','2','3'
+
+            # Get count or use 0 if not present
+            try:
+                count = crosstab.loc[x_label, y_label]
+            except (KeyError, ValueError):
+                count = 0
+
+            # Add text annotation with count
+            ax.text(
+                i + 0.5,
+                j + 0.5,
+                str(count),
+                ha="center",
+                va="center",
+                fontsize=fontsize_counts,
+                color="black" if np.mean(color[:3]) > 0.5 else "white",
+            )  # Adjust text color for visibility
+
+    # Rest of function remains the same as before
+    # Set legend labels and styling
+    ax.text(
+        -0.075,
+        0.1,
+        "Low",
+        ha="center",
+        va="center",
+        rotation=90,
+        transform=ax.transAxes,
+    )
+    ax.text(
+        -0.075,
+        0.9,
+        "High",
+        ha="center",
+        va="center",
+        rotation=90,
+        transform=ax.transAxes,
+    )
+    ax.text(0.1, -0.075, "Low", ha="center", va="center", transform=ax.transAxes)
+    ax.text(0.9, -0.075, "High", ha="center", va="center", transform=ax.transAxes)
+    ax.set_xlim([0, 3])
+    ax.set_ylim([0, 3])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel(x_label_legend, labelpad=15)
+    ax.set_ylabel(y_label_legend, labelpad=15)
+    ax.spines["top"].set_visible(True)
+    ax.spines["right"].set_visible(True)
+    ax.spines["bottom"].set_visible(True)
+    ax.spines["left"].set_visible(True)
+    ax.xaxis.set_tick_params(size=0)
+    ax.yaxis.set_tick_params(size=0)
+    ax.tick_params(axis="both", which="both", length=0)
+    ax.annotate(
+        "",
+        xy=(-0.06, 0.25),
+        xycoords="axes fraction",
+        xytext=(-0.06, 0.75),
+        arrowprops=dict(arrowstyle="<-", lw=1.5),
+    )
+    ax.annotate(
+        "",
+        xy=(0.25, -0.06),
+        xycoords="axes fraction",
+        xytext=(0.75, -0.06),
+        arrowprops=dict(arrowstyle="<-", lw=1.5),
+    )
+
+    # Remove legend edge color if present
+    legend = ax.get_legend()
+    if legend is not None:
+        legend.set_edgecolor("none")
+
+    # Get figure and transform for proper positioning
+    fig = ax.get_figure()
+
+    # Calculate counts for both variables
+    x_counts = data[x_var].value_counts().sort_index()
+    y_counts = data[y_var].value_counts().sort_index()
+
+    # Create and position top histogram (for x variable)
+    bbox = ax.get_position()
+    ax_top = fig.add_axes([bbox.x0, bbox.y1, bbox.width, bbox.height / 3])
+    ax_top.patch.set_alpha(0)  # Transparent background
+
+    # Create bars with positions aligned to grid cells
+    bar_positions = [0.5, 1.5, 2.5]  # Center of each column
+    bars_x = ax_top.bar(
+        bar_positions,
+        x_counts.values,
+        width=0.8,
+        edgecolor=bar_edgecolor,
+        linewidth=bar_linewidth,
+        alpha=hist_alpha,
+    )
+
+    # Color the bars to match the top row of color matrix
+    for i, bar in enumerate(bars_x):
+        bar.set_facecolor(mcolors.to_rgba(color_matrix[0][i]))
+
+    # Style the top histogram
+    ax_top.set_xlim([0, 3])
+    ax_top.spines["top"].set_visible(False)
+    ax_top.spines["right"].set_visible(False)
+    ax_top.set_xticks([])
+    ax_top.tick_params(axis="y", which="major", labelsize=fontsize_ticks)
+
+    # Create right histogram (for y variable)
+    ax_right = fig.add_axes([bbox.x1 + 0.015, bbox.y0, bbox.width / 3, bbox.height])
+    ax_right.patch.set_alpha(0)
+
+    # Make sure the y-axis limits match exactly with the main plot
+    ax_right.set_ylim([0, 3])
+
+    # Create bars with positions aligned to grid rows
+    bar_positions = [0.6, 1.5, 2.4]  # Center of each row
+    bars_y = ax_right.barh(
+        bar_positions,
+        y_counts.values,
+        height=0.8,
+        edgecolor=bar_edgecolor,
+        linewidth=bar_linewidth,
+        alpha=hist_alpha,
+    )
+
+    # Color the bars to match the rightmost column
+    for i, bar in enumerate(bars_y):
+        bar.set_facecolor(mcolors.to_rgba(color_matrix[2 - i][2]))
+
+    # Style the right histogram
+    ax_right.set_ylim([0, 3])
+    ax_right.spines["top"].set_visible(False)
+    ax_right.spines["right"].set_visible(False)
+    ax_right.set_yticks([])
+    ax_right.tick_params(axis="x", which="major", labelsize=fontsize_ticks)
+
+    return ax, ax_top, ax_right
+
+
+def add_categorical_barchart(
+    ax,
+    data,
+    column,
+    color_dict,
+    position=[0.75, 0.05, 0.2, 0.4],
+    title="Category Distribution",
+    alpha=1,
+    fontsize_title=8,
+    fontsize_labels=7,
+    fontsize_ticks=6,
+    bar_edgecolor="black",
+    bar_linewidth=0.5,
+):
+    """
+    Add a categorical bar chart legend to a plot.
+
+    Parameters:
+    -----------
+    ax : matplotlib.axes.Axes
+        The main axes to add the bar chart to
+    data : pandas.DataFrame
+        DataFrame containing the data to plot
+    column : str
+        Column name in the DataFrame containing categorical data
+    color_dict : dict
+        Dictionary mapping category values to colors
+    position : list, optional
+        Position of the inset axes [x, y, width, height]
+    title : str, optional
+        Title for the bar chart
+    alpha : float, optional
+        Transparency of the bars
+    fontsize_title : int, optional
+        Font size for the title
+    fontsize_labels : int, optional
+        Font size for the axis labels
+    fontsize_ticks : int, optional
+        Font size for the tick labels
+    bar_edgecolor : str, optional
+        Color of the bar edges
+    bar_linewidth : float, optional
+        Width of the bar edges
+
+    Returns:
+    --------
+    bar_ax : matplotlib.axes.Axes
+        The axes object for the bar chart
+    """
+    # Create inset axes for bar chart with transparent background
+    bar_ax = ax.inset_axes(position)
+    bar_ax.patch.set_alpha(0)  # Make background transparent
+
+    # Count occurrences of each category
+    value_counts = data[column].value_counts().sort_index()
+
+    # Create horizontal bar chart
+    bars = bar_ax.barh(
+        range(len(value_counts)),
+        value_counts.values,
+        alpha=alpha,
+        edgecolor=bar_edgecolor,
+        linewidth=bar_linewidth,
+    )
+
+    # Color the bars according to the color dictionary
+    for i, (category, _) in enumerate(value_counts.items()):
+        if category in color_dict:
+            bars[i].set_color(color_dict[category])
+
+    # Set the y-tick labels to be the category names
+    # Use cleaner labels if available
+    clean_labels = {
+        "network_crit_contribution": "Network\n criticality",
+        "damage_suscept_contribution": "Damage\n susceptibility",
+        "adaptive_capacity_contribution": "Adaptive\n capacity",
+    }
+
+    labels = [clean_labels.get(cat, cat) for cat in value_counts.index]
+    bar_ax.set_yticks(range(len(value_counts)))
+    bar_ax.set_yticklabels(labels, fontsize=fontsize_ticks)
+
+    # Style the bar chart
+    bar_ax.set_title(title, fontsize=fontsize_title)
+    bar_ax.set_xlabel("Frequency", fontsize=fontsize_labels)
+    bar_ax.tick_params(axis="x", which="major", labelsize=fontsize_ticks)
+
+    # Remove top and right spines
+    bar_ax.spines["top"].set_visible(False)
+    bar_ax.spines["right"].set_visible(False)
+
+    return bar_ax

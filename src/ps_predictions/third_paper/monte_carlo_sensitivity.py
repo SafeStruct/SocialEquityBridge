@@ -1,0 +1,722 @@
+# Standard library imports
+import os
+import multiprocessing
+import gc
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from functools import partial
+
+# Scientific computing imports
+import numpy as np
+import pandas as pd
+
+# from scipy import stats
+# from scipy.stats import qmc
+from scipy.stats import norm
+
+# Visualization imports
+from tqdm import tqdm
+
+from SALib.sample import sobol
+
+# Custom module imports
+from data_analysis_PCA_share_variables import (
+    preprocess_data,
+    run_pca_analysis,
+)
+
+from ps_predictions.third_paper.pca_helper_functions import (
+    calculate_vulnerability_scores,
+)
+
+from monte_carlo_plotting_functions import (
+    plot_uncertainty_analysis,
+    plot_sobol_indices,
+    analyze_sobol_indices,
+    plot_sobol_variance_decomposition,
+    plot_sobol_total_effects,
+    create_sensitivity_summary_table,
+    plot_input_distributions,
+    verify_sobol_properties,
+)
+
+
+def generate_saltelli_params(n_samples, param_ranges, param_distributions):
+    """
+    Generate parameter samples using Saltelli's method for Sobol sensitivity analysis.
+
+    Parameters
+    ----------
+    n_samples : int
+        The number of base samples to generate. The actual number of samples
+        will be N*(D+2) where D is the number of parameters.
+    param_ranges : dict
+        Dictionary mapping parameter names to their ranges:
+        - For uniform distributions: (min_val, max_val)
+        - For lognormal distributions: {"range": (min_val, max_val), "median": median_val}
+        - For discrete lists: [value1, value2, ...]
+    param_distributions : dict
+        Dictionary mapping parameter names to their distribution type:
+        - "uniform": Uniform distribution
+        - "lognormal": Lognormal distribution
+        - "discrete": Discrete sampling from a list or range
+
+    Returns
+    -------
+    tuple
+        (param_samples, problem) where param_samples is a list of parameter dictionaries
+        and problem is the SALib problem definition
+    """
+
+    print(f"\nGenerating Saltelli samples with base N={n_samples}...")
+
+    # Prepare the problem definition for SALib
+    problem = {
+        "num_vars": len(param_ranges),
+        "names": list(param_ranges.keys()),
+        "bounds": [],
+    }
+
+    # Store info about different variable types for later mapping
+    categorical_info = {}
+
+    # Define bounds for SALib sampling and store additional info for post-processing
+    for param, range_val in param_ranges.items():
+        dist_type = param_distributions[param]
+
+        if dist_type == "discrete" and isinstance(range_val, list):
+            # For categorical parameters (including booleans and strings)
+            # We sample from [0,1] and map to categories later
+            categorical_info[param] = {
+                "type": "list",
+                "values": range_val,
+            }
+            problem["bounds"].append([0, 1])
+
+        elif dist_type == "lognormal":
+            # For lognormal, we sample from [0,1] and transform later
+            # Store the range and median for post-processing
+            min_val, max_val = range_val["range"]
+            problem["bounds"].append([0, 1])
+            categorical_info[param] = {
+                "type": "lognormal",
+                "min": min_val,
+                "max": max_val,
+                "median": range_val["median"],
+            }
+
+        elif dist_type == "discrete" and not isinstance(range_val, list):
+            # For discrete ranges (integers), we sample from [0,1]
+            min_val, max_val = range_val
+            categorical_info[param] = {
+                "type": "discrete_range",
+                "min": min_val,
+                "max": max_val,
+            }
+            problem["bounds"].append([0, 1])
+
+        else:
+            # For uniform continuous, we can sample directly from the range
+            min_val, max_val = range_val
+            problem["bounds"].append([min_val, max_val])
+
+    # Generate samples using Saltelli's method
+    # This will generate N*(D+2) samples where D is the number of parameters
+    param_values = sobol.sample(problem, n_samples, calc_second_order=False, seed=42)
+
+    print(f"Generated {len(param_values)} Saltelli samples")
+
+    # Convert the sample array to a list of parameter dictionaries
+    param_samples = []
+
+    print("\nProcessing Saltelli samples...")
+    for j, sample in enumerate(param_values):
+        if j % 100 == 0:  # Print progress every 100 samples
+            print(f"Processing sample {j}/{len(param_values)}")
+
+        params = {}
+        for i, param in enumerate(problem["names"]):
+            value = sample[i]
+
+            # Apply appropriate transformations based on parameter type
+            if param in categorical_info:
+                info = categorical_info[param]
+
+                if info["type"] == "list":
+                    # Handle categorical variables (including boolean and strings)
+                    # Transform [0,1) value to a categorical value
+                    categories = categorical_info[param]["values"]
+                    num_categories = len(categories)
+                    # Map to categories ensuring equal probability
+                    category_index = min(
+                        int(value * num_categories), num_categories - 1
+                    )
+                    params[param] = categories[category_index]
+
+                elif info["type"] == "lognormal":
+                    # Transform uniform [0,1] to truncated lognormal
+                    min_val = info["min"]
+                    max_val = info["max"]
+                    median = info["median"]
+
+                    # Calculate parameters for lognormal distribution
+                    mu = np.log(median)  # Median in log-space equals mu
+                    # Set sigma based on the min and max values (95% confidence interval)
+                    sigma = np.log(max_val / min_val) / (
+                        2 * 3.090232
+                    )  # 3.090232 = 2*1.96
+
+                    # Calculate CDF values for the bounds
+                    lower_cdf = norm.cdf((np.log(min_val) - mu) / sigma)
+                    upper_cdf = norm.cdf((np.log(max_val) - mu) / sigma)
+
+                    # Map uniform value to the truncated range of probabilities
+                    prob = lower_cdf + value * (upper_cdf - lower_cdf)
+
+                    # Use inverse CDF to get the lognormal value
+                    lognormal_value = np.exp(norm.ppf(prob) * sigma + mu)
+                    params[param] = lognormal_value
+
+                elif info["type"] == "discrete_range":
+                    # Transform to discrete integers in the range
+                    min_val = info["min"]
+                    max_val = info["max"]
+
+                    # Number of possible values in the range (inclusive)
+                    num_values = max_val - min_val + 1
+
+                    # Map uniform value to discrete value ensuring equal probability
+                    discrete_value = min_val + min(
+                        int(value * num_values), num_values - 1
+                    )
+                    params[param] = discrete_value
+
+            else:
+                # Use value directly for uniform continuous parameters
+                params[param] = value
+
+        param_samples.append(params)
+
+    print(f"Successfully generated {len(param_samples)} parameter sets")
+    return param_samples, problem
+
+
+def calculate_ranking_changes(base_rankings, new_rankings):
+    """Calculate how many places each county moved in the rankings."""
+    ranking_changes = {}
+    for county in base_rankings.index:
+        old_rank = base_rankings[county]
+        new_rank = new_rankings[county]
+        ranking_changes[county] = new_rank - old_rank
+    return ranking_changes
+
+
+def process_batch(
+    params, nbi_df, aggregation_method=None, pca_params=None, return_rankings=False
+):
+    """Process a single parameter combination."""
+    try:
+        # Create a copy of the base PCA parameters
+        run_params = {}
+        if pca_params:
+            run_params.update(pca_params)
+
+        # Update with the Monte Carlo variable parameters
+        run_params.update(params)
+
+        # Add the constant parameters
+        run_params["verbose"] = False
+
+        # Get aggregation_method from params if it's included there, otherwise use the provided value
+        batch_aggregation_method = params.get("aggregation_method", aggregation_method)
+
+        # Set the aggregation method in run_params
+        run_params["aggregation_method"] = batch_aggregation_method
+
+        if batch_aggregation_method == "simplified":
+            run_params["return_county_data"] = True
+            # Run PCA analysis with specified parameters
+            weights_df, scaled_county_df = run_pca_analysis(nbi_df=nbi_df, **run_params)
+
+            # Use the calculate_vulnerability_scores function to get final scores
+            normalized_scores = calculate_vulnerability_scores(
+                scaled_county_df,
+                weights_df,
+                batch_aggregation_method,
+                return_rankings=return_rankings,
+            )
+
+            # Original approach - analyze weights and communalities
+            result = {
+                **params,
+                **weights_df["Final_Weight"].to_dict(),
+                **{
+                    f"{col}_comm": val for col, val in weights_df["Communality"].items()
+                },
+            }
+
+            # Add county final scores
+            for i in range(len(normalized_scores.index)):
+                county_code = scaled_county_df.index[i]
+                result[f"county_{county_code}"] = normalized_scores.iloc[i, 0]
+        else:
+            # Complex approach - calculate final composite indicator scores for each county
+            run_params["return_county_data"] = True
+
+            weights_df, scaled_county_df = run_pca_analysis(nbi_df=nbi_df, **run_params)
+
+            # Use the calculate_vulnerability_scores function to get final scores
+            normalized_scores = calculate_vulnerability_scores(
+                scaled_county_df,
+                weights_df,
+                batch_aggregation_method,
+                return_rankings=return_rankings,
+            )
+
+            # Return the raw parameters with the communalities
+            result = {
+                **params,
+                **{
+                    f"{col}_comm": val for col, val in weights_df["Communality"].items()
+                },
+            }
+
+            # Add county final scores
+            for i in range(len(normalized_scores.index)):
+                county_code = scaled_county_df.index[i]
+                result[f"county_{county_code}"] = normalized_scores.iloc[i, 0]
+
+        # Clean-up
+        del weights_df, scaled_county_df, normalized_scores
+        gc.collect()
+        # Return the result
+        return result
+    except Exception as e:
+        print(f"\nError in iteration: {str(e)}")
+        print(f"Parameters: {params}")
+        return None
+
+
+def run_sensitivity_analysis(
+    nbi_df,
+    param_ranges,
+    param_distributions,
+    aggregation_method=None,
+    pca_params=None,
+    n_samples=256,
+    batch_size=64,
+    n_workers=4,
+    return_rankings=False,
+):
+    """Run sensitivity analysis in parallel batches to manage memory usage."""
+    print(
+        f"\nStarting sensitivity analysis with {n_samples} samples, batch size {batch_size}, and {n_workers} workers"
+    )
+
+    # # Generate all parameter samples at once using Sobol sequences
+    # param_samples = generate_sobol_params(n_samples, param_ranges, param_distributions)
+
+    print(f"\nStarting sensitivity analysis with {n_samples} base samples...")
+    print(
+        f"This will generate approximately {n_samples * (len(param_ranges) + 2)} total samples"
+    )
+
+    # Generate parameter samples using Saltelli's method
+    param_samples, problem = generate_saltelli_params(
+        n_samples, param_ranges, param_distributions
+    )
+
+    # Plot distributions
+    plot_input_distributions(param_samples, param_distributions, folder_path)
+
+    # Verify sampling
+    results_sampling = verify_sobol_properties(param_samples, param_ranges)
+    print("Sampling results for verification")
+    print(results_sampling)
+
+    # Initialize storage for results
+    all_results = []
+    total_successful = 0
+
+    # Create a partial function with fixed nbi_df, aggregation_method, and pca_params
+    process_func = partial(
+        process_batch,
+        nbi_df=nbi_df,
+        aggregation_method=aggregation_method,
+        pca_params=pca_params,
+        return_rankings=return_rankings,
+    )
+
+    # Process in batches with parallel execution
+    print("\nStarting batch processing...")
+
+    # Create progress bar for total progress
+    with tqdm(total=len(param_samples), desc="Total progress") as pbar:
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            # Create a list to store all results with their original indices
+            # all_results_with_indices = []
+
+            for batch_start in range(0, len(param_samples), batch_size):
+                batch_end = min(batch_start + batch_size, len(param_samples))
+                batch_params = param_samples[batch_start:batch_end]
+
+                # Create a list of tuples with (index, params) to track original order
+                indexed_batch = list(enumerate(batch_params, start=batch_start))
+
+                # Submit batch of parameters to process pool
+                futures = {
+                    executor.submit(process_func, params): idx
+                    for idx, params in indexed_batch
+                }
+
+                # Collect results as they complete, but store with original indices
+                batch_results = []
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    result = future.result()
+                    if result is not None:
+                        batch_results.append((idx, result))
+                        total_successful += 1
+                        pbar.update(1)
+
+                # Sort batch results by original index and extract just the results
+                batch_results.sort(key=lambda x: x[0])
+                sorted_batch_results = [result for _, result in batch_results]
+
+                # Convert batch results to DataFrame and append to all_results
+                if sorted_batch_results:
+                    batch_df = pd.DataFrame(sorted_batch_results)
+                    all_results.append(batch_df)
+
+                # Clear memory
+                del batch_results, sorted_batch_results
+                gc.collect()
+
+    print(
+        f"\nCompleted processing with {total_successful}/{n_samples} successful iterations"
+    )
+
+    # Combine all results
+    if all_results:
+        print("\nCombining all batch results...")
+        final_results = pd.concat(all_results, ignore_index=True)
+        print(f"Final results shape: {final_results.shape}")
+
+        # Clear memory
+        del all_results
+        gc.collect()
+
+        return final_results, problem
+    else:
+        raise ValueError("No valid results were generated during the analysis.")
+
+
+if __name__ == "__main__":
+    # ======= Define paths =======
+    general_folder = "/mnt/g/SOCIAL_PAPER"
+    folder_path = os.path.join(general_folder, "monte_carlo_sensitivity")
+    # Create folder if it doesn't exist
+    os.makedirs(folder_path, exist_ok=True)
+
+    # Set random seed for reproducibility
+    np.random.seed(42)
+
+    # ====== Set parameters for Monte Carlo simulation ======
+    # Number of samples to generate; This will generate ~n_samples*(2*n_parameters+2)= samples
+    # for n_parameters parameters
+    n_samples = 4098
+    batch_size = 128  # Batch size for parallel processing
+    # n_samples = 64
+    # batch_size = 8  # Batch size for parallel processing
+
+    # Choose analysis type: "threshold" or "pca"
+    analysis_type = "threshold"  # Change to "pca" for PCA parameter sensitivity
+
+    # Define constant threshold values (used when analysis_type is "pca")
+    default_thresholds = {
+        "ADT_THRESHOLD": 25000,
+        "DETOUR_THRESHOLD_MILES": 15,
+        "WATERWAY_EVAL_THRESHOLD": 3,
+        "SCOUR_CRITICAL_THRESHOLD": 3,
+        "DISPLACEMENT_THRESHOLD": 10,
+    }
+
+    # Define base PCA analysis parameters (used when analysis_type is "threshold")
+    base_pca_params = {
+        "pca_type": "standard",  # Type of PCA: "standard" or "robust"
+        "capping": True,  # Whether to cap outliers
+        "skew_threshold": 1,  # Threshold for Yeo-Johnson transformation
+        "aggregation_method": "complex",
+        "dynamic_components_retention": True,  # Whether to determine components dynamically
+        "variance_threshold": 0.8,  # Variance threshold for dynamic components
+        "mahalanobis_threshold": 97.5,
+    }
+
+    # Define parameter ranges for threshold sensitivity analysis
+    threshold_param_ranges = {
+        "ADT_THRESHOLD": (
+            5000,
+            25000,
+        ),  # Uniform distribution for Average Daily Traffic
+        "DETOUR_THRESHOLD_MILES": {
+            "range": (8.5, 85),
+            "median": 15.0,  # Specify median for log-normal distribution
+        },
+        "WATERWAY_EVAL_THRESHOLD": [
+            2,
+            3,
+            4,
+        ],  # Discrete choices for waterway evaluation
+        "SCOUR_CRITICAL_THRESHOLD": [
+            2,
+            3,
+            4,
+        ],  # Discrete choices for scour critical rating
+        "DISPLACEMENT_THRESHOLD": (
+            4,
+            15,
+        ),  # Uniform distribution for displacement susceptibility
+    }
+
+    # Define distribution types for threshold parameters
+    threshold_param_distributions = {
+        "ADT_THRESHOLD": "uniform",
+        "DETOUR_THRESHOLD_MILES": "lognormal",
+        "WATERWAY_EVAL_THRESHOLD": "discrete",
+        "SCOUR_CRITICAL_THRESHOLD": "discrete",
+        "DISPLACEMENT_THRESHOLD": "uniform",
+    }
+
+    # Define parameter ranges for PCA sensitivity analysis
+    pca_param_ranges = {
+        "capping": [True, False],  # Discrete choice for capping outliers
+        "skew_threshold": (0, 2),  # Uniform distribution for Yeo-Johnson transformation
+        "variance_threshold": (0.7, 0.9),  # Uniform distribution for variance threshold
+        "aggregation_method": [
+            "simplified",
+            "complex",
+        ],  # Discrete choice for aggregation method
+        "mahalanobis_threshold": (
+            95,
+            100,
+        ),  # Uniform distribution for Mahalanobis threshold
+        "drop_indicator": [
+            "none",  # Keep all indicators
+            "high_traffic_load",  # Drop indicator 1
+            "strategic_importance",  # Drop indicator 2
+            "long_detour",  # Drop indicator 3
+            "structural_vulnerability",  # Drop indicator 4
+            "natural_hazard_vulnerability",  # Drop indicator 5
+            "load_capacity_issues",  # Drop indicator 6
+            "brdgs_with_no_monitoring",  # Drop indicator 7
+            "inspection_frequency_issues",  # Drop indicator 8
+            "replacement_cost_share_GDP",  # Drop indicator 9
+        ],
+    }
+
+    # Define distribution types for PCA parameters
+    pca_param_distributions = {
+        "capping": "discrete",
+        "skew_threshold": "uniform",
+        "variance_threshold": "uniform",
+        "aggregation_method": "discrete",
+        "mahalanobis_threshold": "uniform",
+        "drop_indicator": "discrete",
+    }
+
+    # Select parameters based on analysis type
+    if analysis_type == "threshold":
+        param_ranges = threshold_param_ranges
+        param_distributions = threshold_param_distributions
+        pca_params = base_pca_params
+        aggregation_method = "complex"  # Can be "simplified" or "complex"
+    elif analysis_type == "pca":
+        param_ranges = pca_param_ranges
+        param_distributions = pca_param_distributions
+
+        # Set up PCA params - exclude parameters that will be varied in the sensitivity analysis
+        pca_params = {
+            k: v
+            for k, v in base_pca_params.items()
+            if k not in pca_param_ranges
+            or k == "pca_type"
+            or k == "dynamic_components_retention"
+        }
+
+        # Add the default threshold values to pca_params
+        pca_params.update(default_thresholds)
+
+        # Set aggregation_method to None as it will be varied in the sensitivity analysis
+        aggregation_method = None
+    else:
+        raise ValueError("Invalid analysis_type. Must be 'threshold' or 'pca'.")
+
+    # ========= Preprocess data =================
+    print("Preprocessing data...")
+    nbi_df = preprocess_data(verbose=False)
+    print("Data preprocessing completed")
+
+    # ========= Run Monte Carlo sensitivity analysis =========
+    # Determine optimal number of workers based on CPU cores
+    n_workers = max(1, multiprocessing.cpu_count() - 1)  # Leave one core free
+    print(f"Using {n_workers} workers for parallel processing")
+
+    try:
+        # Run sensitivity analysis with rankings (1-58)
+        print("\nRunning sensitivity analysis with rankings...")
+        results_rankings, problem = run_sensitivity_analysis(
+            nbi_df,
+            param_ranges=param_ranges,
+            param_distributions=param_distributions,
+            aggregation_method=aggregation_method,
+            pca_params=pca_params,
+            n_samples=n_samples,
+            # batch_size=batch_size,
+            # n_workers=n_workers,
+            return_rankings=True,
+        )
+
+        # Import csv that have county codes and names
+        county_codes_df = pd.read_csv(
+            os.path.join(
+                "/mnt/g/SOCIAL_PAPER/California_county_codes", "county_codes.csv"
+            )
+        )
+
+        # Create a mapping from county code to county name
+        county_mapping = dict(
+            zip(county_codes_df["COUNTYFP"].astype(str), county_codes_df["COUNTYNAME"])
+        )
+
+        # Find all columns that start with 'county_' and rename them
+        county_cols = [
+            col for col in results_rankings.columns if col.startswith("county_")
+        ]
+        rename_dict = {}
+
+        for col in county_cols:
+            county_code = col.split("_")[1]  # Extract the code from 'county_111'
+            if county_code in county_mapping:
+                # Get the county name and remove " County" if present
+                county_name = county_mapping[county_code].replace(" County", "")
+                rename_dict[col] = f"county_{county_name}"
+
+        # Rename the columns
+        results_rankings.rename(columns=rename_dict, inplace=True)
+
+        # Drop variance_ratio_comm if in columns
+        if "Variance_ratio_comm" in results_rankings.columns:
+            results_rankings.drop(columns=["Variance_ratio_comm"], inplace=True)
+
+        # Save raw results to CSV
+        print("\nSaving results...")
+        results_rankings.to_csv(
+            os.path.join(
+                folder_path, f"sensitivity_results_{analysis_type}_rankings.csv"
+            ),
+            index=False,
+        )
+        print("Results saved successfully")
+
+        # Read original results to be plotted as reference
+        original_results = pd.read_csv(
+            "/mnt/g/SOCIAL_PAPER/PFA_results/weighted_subindicators.csv"
+        )
+
+        print("\nCreating visualizations...")
+        # Plot rankings uncertainty
+        plot_uncertainty_analysis(
+            results_rankings,
+            original_results,
+            folder_path=folder_path,
+            plot_type="rankings",
+            param_ranges=param_ranges,
+            analysis_type=analysis_type,
+        )
+
+        # # Plot ranking changes
+        # plot_ranking_changes(
+        #     results_rankings,
+        #     folder_path=folder_path,
+        #     param_ranges=param_ranges,
+        # )
+
+        # Calculate and plot Sobol indices for rankings
+        sobol_indices_rankings = analyze_sobol_indices(results_rankings, problem)
+
+        # Convert the nested dictionary structure to a wide DataFrame
+        wide_rows = {}
+        for output_var, indices in sobol_indices_rankings.items():
+            if output_var not in wide_rows:
+                wide_rows[output_var] = {"county": output_var}
+            for index_type, values in indices.items():
+                for param, value in values.items():
+                    col_name = f"{index_type}_{param}"
+                    wide_rows[output_var][col_name] = value
+
+        # Create DataFrame and save to CSV
+        sobol_wide_df = pd.DataFrame.from_dict(wide_rows, orient="index")
+        # fill nans with 0
+        sobol_wide_df.fillna(0, inplace=True)
+        sobol_wide_df.to_csv(
+            os.path.join(
+                folder_path, f"sobol_indices_{analysis_type}_rankings_wide.csv"
+            ),
+            index=False,
+        )
+
+        # Sort sobol_wide_df by the rank from the original results
+        original_results.sort_values(by=["rank"], ascending=False, inplace=True)
+        desired_order = original_results["County Name"].tolist()
+        transformed_order = ["county_" + county for county in desired_order]
+        filtered_sobol = sobol_wide_df[sobol_wide_df["county"].isin(transformed_order)]
+        # Create a mapping dictionary for county order
+        order_map = {county: i for i, county in enumerate(transformed_order)}
+
+        # Create a new column with the desired sort order
+        filtered_sobol = (
+            filtered_sobol.copy()
+        )  # Create a copy to avoid SettingWithCopyWarning
+        filtered_sobol["sort_order"] = filtered_sobol.index.map(order_map)
+
+        # Sort by the numerical order column
+        sorted_sobol = filtered_sobol.sort_values("sort_order").reset_index(drop=True)
+
+        # Drop the temporary sorting column if desired
+        sorted_sobol = sorted_sobol.drop("sort_order", axis=1)
+
+        # Plot Sobol indices for rankings
+        plot_sobol_indices(
+            sorted_sobol,
+            folder_path,
+            "rankings",
+            analysis_type=analysis_type,
+        )
+
+        sorted_sobol = sorted_sobol.set_index("county")
+
+        # Plot variance decomposition
+        plot_sobol_variance_decomposition(
+            sorted_sobol,
+            results_rankings,
+            folder_path,
+            analysis_type=analysis_type,
+        )
+
+        # Plot total effect sensitivity indices
+        plot_sobol_total_effects(
+            sorted_sobol,
+            folder_path,
+            analysis_type=analysis_type,
+        )
+
+        # Create summary table of sensitivity indices
+        summary_df = create_sensitivity_summary_table(
+            sobol_indices_rankings, folder_path, analysis_type=analysis_type
+        )
+        print(f"Sensitivity summary table created with {len(summary_df)} parameters")
+
+        print("Visualizations completed")
+
+    except Exception as e:
+        print(f"\nError occurred during execution: {str(e)}")
+        raise

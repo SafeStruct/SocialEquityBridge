@@ -1,0 +1,71 @@
+# This script is used to match the county code in the NBI data
+# with the county name from Census
+
+import pandas as pd
+
+# Read bridge csv
+bridge_csv = pd.read_csv("/mnt/g/SOCIAL_PAPER/California_brdgs/NBI/nbi_bridges_geo.csv")
+county_codes_csv = pd.read_csv(
+    "/mnt/g/SOCIAL_PAPER/California_county_codes/county_codes.csv"
+)
+
+# Drop columns that are not needed from county codes df
+county_codes_csv = county_codes_csv[["COUNTYFP", "COUNTYNAME"]]
+
+# Remove "County" from the county name
+county_codes_csv.loc[:, "COUNTYNAME"] = county_codes_csv["COUNTYNAME"].str.replace(
+    " County", ""
+)
+
+# Merge the two dataframes on the county code
+merged_bridges_codes = pd.merge(
+    bridge_csv, county_codes_csv, left_on="COUNTY_CODE_003", right_on="COUNTYFP"
+)
+
+# Drop countyFP column
+merged_bridges_codes.drop(columns=["COUNTYFP"], inplace=True)
+
+
+# Read county-level data
+county_data = pd.read_excel(
+    "/mnt/g/SOCIAL_PAPER/California_county_GDP_2023/California_GDP_manually_extracted.xlsx",
+)
+
+# Multiply the GDP by 1000 to convert it to dollars
+county_data["GDP2023"] = county_data["GDP2023"] * 1000
+
+# Merge the on the county name
+merged_bridges_codes_gdp = pd.merge(
+    merged_bridges_codes, county_data, left_on="COUNTYNAME", right_on="County"
+)
+
+# Drop County column
+# merged_bridges_codes_gdp.drop(columns=["County"], inplace=True)
+
+
+# Read csv with bridge lines
+bridge_lines_csv = pd.read_csv("/mnt/g/SOCIAL_PAPER/bridge_lines_displacement.csv")
+
+
+# Remove any number of white spaces at the beginning of the string
+merged_bridges_codes_gdp["STRUCTURE_NUMBER_008"] = merged_bridges_codes_gdp[
+    "STRUCTURE_NUMBER_008"
+].str.lstrip()
+merged_bridges_codes_gdp["STRUCTURE_NUMBER_008"] = merged_bridges_codes_gdp[
+    "STRUCTURE_NUMBER_008"
+].str.rstrip()
+
+# There is one bridge for each line was not found. Identify the bridge by the column "STRUCTURE_"
+# in bridge_lines_csv which is the same as "STRUCTURE_NUMBER_008" in merged_bridges_codes_gdp
+# Drop the bridge that have no line from merged_bridges_codes_gdp
+merged_bridges_codes_gdp = merged_bridges_codes_gdp[
+    merged_bridges_codes_gdp["STRUCTURE_NUMBER_008"].isin(
+        bridge_lines_csv["STRUCTURE_"]
+    )
+]
+
+
+# Save the merged dataframe to a csv file
+merged_bridges_codes_gdp.to_csv(
+    "/mnt/g/SOCIAL_PAPER/California_brdgs/NBI/nbi_bridges_geo_county.csv", index=False
+)

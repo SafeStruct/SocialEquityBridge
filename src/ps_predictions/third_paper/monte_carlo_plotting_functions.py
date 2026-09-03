@@ -1,0 +1,1111 @@
+"""
+This module contains functions for creating visualizations from Monte Carlo sensitivity analysis results.
+It supports generating plots for uncertainty analysis, sensitivity indices, and correlation heatmaps.
+"""
+
+# Standard library imports
+import os
+
+# Scientific computing imports
+import numpy as np
+import pandas as pd
+from SALib.analyze import sobol
+
+# from scipy import stats
+
+# Visualization imports
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+def calculate_sensitivity_indices(results_df, param_ranges):
+    """
+    Calculate sensitivity indices using scipy's implementation.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        DataFrame containing Monte Carlo simulation results
+    param_ranges : dict
+        Dictionary containing the parameter ranges that were varied in the simulation
+
+    Returns
+    -------
+    dict
+        Nested dictionary containing sensitivity indices for each output variable
+    """
+    # Identify parameter columns and output columns
+    param_cols = list(param_ranges.keys())
+
+    # Communality columns (all non-parameter columns that end with "_comm")
+    comm_cols = [
+        col
+        for col in results_df.columns
+        if col not in param_cols and col.endswith("_comm")
+    ]
+
+    # Indicies columns (all non-parameter columns that start with "county_")
+    indices_cols = [
+        col
+        for col in results_df.columns
+        if col not in param_cols and col.startswith("county_")
+    ]
+
+    output_cols = indices_cols + comm_cols
+
+    # Initialize results dictionary
+    sensitivity_results = {}
+
+    # Calculate sensitivity indices for each output
+    for col in output_cols:
+        # Calculate variance-based sensitivity indices
+        variances = {}
+        total_variance = results_df[col].var()
+
+        for param in param_cols:
+            # Group by parameter quantiles to estimate conditional variance
+            # This is the basis for variance-based sensitivity analysis
+            try:
+                # Handle case where parameter values might have limited unique values
+                n_quantiles = min(10, max(2, results_df[param].nunique()))
+
+                # Check if parameter contains numeric data before using qcut
+                if pd.api.types.is_numeric_dtype(results_df[param]):
+                    groups = pd.qcut(
+                        results_df[param], q=n_quantiles, duplicates="drop"
+                    )
+                else:
+                    # For categorical/string parameters, group directly by values
+                    groups = results_df[param]
+
+                # Calculate mean of output for each parameter group
+                conditional_means = results_df.groupby(groups, observed=True)[
+                    col
+                ].mean()
+
+                # First-order effect (S1): var(E[Y|X]) / var(Y)
+                # Measures the direct effect of parameter without interactions
+                S1 = (
+                    conditional_means.var() / total_variance
+                    if total_variance > 0
+                    else 0
+                )
+            except Exception as e:
+                print(
+                    f"Warning when calculating sensitivity for {param} on {col}: {str(e)}"
+                )
+                S1 = 0
+
+            # Store first-order effect and correlation for this parameter
+            variances[param] = {
+                "S1": S1,  # First-order effect
+            }
+
+        # Store results for this output variable
+        sensitivity_results[col] = variances
+
+    return sensitivity_results
+
+
+def create_bar_plot(data, x_labels, params, title, filename, folder_path):
+    """
+    Create a bar plot for sensitivity indices.
+
+    Parameters
+    ----------
+    data : dict
+        Dictionary containing sensitivity data for each parameter
+    x_labels : list
+        Labels for x-axis (output variables)
+    params : list
+        List of parameter names to include
+    title : str
+        Plot title
+    filename : str
+        Output filename
+    folder_path : str
+        Folder path to save the figure
+    """
+    plt.figure(figsize=(12, 6))
+    x = np.arange(len(x_labels))
+    width = 0.8  # Width of the bars
+
+    # Main effects plot - stacked bars for contributions
+    bottom = np.zeros(len(x_labels))
+    for param in params:
+        plt.bar(x, data[param], width, bottom=bottom, label=param)
+        bottom += data[param]
+
+    # Set labels and style
+    plt.title(title)
+    plt.xlabel("Factors")
+    plt.ylabel("Sensitivity Index")
+    plt.xticks(x, x_labels, rotation=90)
+    plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+    plt.grid(True, axis="y", linestyle="--", alpha=0.7)
+    # plt.grid(True, axis="x", linestyle="--", alpha=0.7)
+
+    plt.tight_layout()
+    plt.savefig(os.path.join(folder_path, filename), dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def plot_sensitivity_indices(results_df, folder_path, param_ranges):
+    """
+    Create bar plots showing first-order sensitivity indices for weights and communalities.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        DataFrame containing Monte Carlo simulation results
+    folder_path : str
+        Folder path to save the figures
+    param_ranges : dict
+        Dictionary containing the parameter ranges that were varied in the simulation
+    """
+    # Calculate sensitivity indices for all outputs
+    sensitivity_results = calculate_sensitivity_indices(results_df, param_ranges)
+
+    # Separate parameter and output columns
+    param_cols = list(param_ranges.keys())
+
+    # Get indicies and communality columns
+    comm_cols = [
+        col
+        for col in results_df.columns
+        if col not in param_cols and col.endswith("_comm")
+    ]
+
+    county_cols = [
+        col
+        for col in results_df.columns
+        if col not in param_cols and col.startswith("county_")
+    ]
+
+    # Plot main effects for composite indicators
+    # =============================
+    # Extract first-order (S1) indices for all weight outputs
+    main_effects_weights = {
+        param: [sensitivity_results[col][param]["S1"] for col in county_cols]
+        for param in param_cols
+    }
+
+    # Create stacked bar plot for weights
+    create_bar_plot(
+        main_effects_weights,
+        county_cols,
+        param_cols,
+        "First-Order Sensitivity Indices for composite indicators",
+        "sensitivity_main_indicies.png",
+        folder_path,
+    )
+
+    # Plot main effects for communalities
+    # ===================================
+    # Clean up communality column names for display (remove "_comm" suffix)
+    comm_cols_display = [col.replace("_comm", "") for col in comm_cols]
+
+    # Extract first-order (S1) indices for all communality outputs
+    main_effects_comm = {
+        param: [sensitivity_results[col][param]["S1"] for col in comm_cols]
+        for param in param_cols
+    }
+
+    # Create stacked bar plot for communalities
+    create_bar_plot(
+        main_effects_comm,
+        comm_cols_display,
+        param_cols,
+        "First-Order Sensitivity Indices for Communalities",
+        "sensitivity_main_communalities.png",
+        folder_path,
+    )
+
+
+def plot_ranking_changes(results_df, folder_path, param_ranges):
+    """
+    Create box plots showing distribution of ranking changes across Monte Carlo runs.
+
+    Parameters:
+    -----------
+    results_df : pd.DataFrame
+        DataFrame containing Monte Carlo simulation results
+    folder_path : str
+        Folder path to save the figures
+    param_ranges : dict
+        Dictionary containing the parameter ranges that were varied in the simulation
+    """
+    # Get the parameter columns
+    # param_cols = list(param_ranges.keys())
+
+    # Get all county columns
+    county_cols = [col for col in results_df.columns if col.startswith("county_")]
+
+    # Skip if no county columns are found
+    if not county_cols:
+        print("No county columns found in the results DataFrame")
+        return
+
+    # Create the figure
+    plt.figure(figsize=(12, 6))
+
+    # Sort columns by their mean value (descending) to highlight important factors
+    group_means = results_df[county_cols].median()
+    group_means = group_means.sort_values(ascending=False)
+
+    # Create boxplot with sorted columns
+    sns.boxplot(data=results_df[county_cols], order=group_means.index, fliersize=0.5)
+
+    # Make county column names more readable
+    display_names = [f"County {col.split('_')[1]}" for col in group_means.index]
+    plt.xticks(range(len(county_cols)), display_names, rotation=90)
+
+    # Customize the plot
+    plt.title("Distribution of Ranking Changes Across Monte Carlo Iterations")
+    plt.xlabel("Counties")
+    plt.ylabel("Ranking Change (positive = moved up, negative = moved down)")
+    plt.grid(True, axis="y", linestyle="--", alpha=0.7)
+
+    # Add a horizontal line at y=0 for reference
+    plt.axhline(y=0, color="r", linestyle="-", alpha=0.3)
+
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+
+    # Save the plot
+    plt.savefig(
+        os.path.join(folder_path, "ranking_changes_uncertainty.png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
+def plot_uncertainty_analysis(
+    results_df,
+    original_df,
+    folder_path,
+    param_ranges,
+    plot_type="weights",
+    analysis_type="threshold",
+):
+    """
+    Create box plots showing distribution of various metrics across Monte Carlo runs.
+
+    Parameters:
+    -----------
+    results_df : pd.DataFrame
+        DataFrame containing Monte Carlo simulation results
+    original_df : pd.DataFrame
+        DataFrame containing the original results for the paper
+    folder_path : str
+        Folder path to save the figures
+    param_ranges : dict
+        Dictionary containing the parameter ranges that were varied in the simulation
+    plot_type : str, optional
+        Type of plot: "weights", "communalities", "indices", or "rankings"
+    analysis_type : str, optional
+        Type of analysis: "threshold" or "pca"
+    """
+
+    # Get the parameter columns
+    param_cols = list(param_ranges.keys())
+
+    # Different column selection and plot settings based on plot type
+    if plot_type == "weights":
+        # Get all weight-related columns (non-parameter, non-communality columns)
+        value_columns = [
+            col
+            for col in results_df.columns
+            if col not in param_cols and not col.endswith("_comm") and col != "index"
+        ]
+
+        title = "Distribution of Weights/Scores Across Monte Carlo Iterations"
+        ylabel = "Weight/Score Values"
+        filename = f"{plot_type}_uncertainty_{analysis_type}.png"
+        y_lim = (0, 1)  # Works for both normalized county scores and weights
+
+        # For the simplified method, adjust y-limit if needed
+        if not any(col.startswith("county_") for col in value_columns):
+            y_lim = (0, 0.25)  # For simplified weights
+
+    elif plot_type == "communalities":
+        # Get all communality columns
+        value_columns = [
+            col
+            for col in results_df.columns
+            if col not in param_cols and col.endswith("_comm")
+        ]
+        # Create more readable column labels by removing "_comm" suffix
+        value_columns_display = [col.replace("_comm", "") for col in value_columns]
+
+        title = "Distribution of Communalities Across Monte Carlo Iterations"
+        ylabel = "Communality Values"
+        filename = f"{plot_type}_uncertainty_{analysis_type}.png"
+        y_lim = (-0.5, 1.5)  # Communalities range from 0 to 1
+
+    elif plot_type == "indices":
+        # Get all index-related columns (if they exist)
+        value_columns = [
+            col
+            for col in results_df.columns
+            if col.startswith("county_") or col == "final_score"
+        ]
+
+        title = "Distribution of Indices Across Monte Carlo Iterations"
+        ylabel = "Index Values"
+        filename = f"{plot_type}_uncertainty_{analysis_type}.png"
+        y_lim = (-0.5, 1.5)  # Indices are typically normalized to 0-1
+
+        # If no index columns are found, provide a message and return
+        if not value_columns:
+            print("No index columns found in the results DataFrame")
+            return
+
+    elif plot_type == "rankings":
+        # Get all county columns
+        value_columns = [col for col in results_df.columns if col.startswith("county_")]
+
+        title = "Distribution of Rankings Across Monte Carlo Iterations"
+        ylabel = "Ranking (1 = highest vulnerability)"
+        filename = f"{plot_type}_uncertainty_{analysis_type}.png"
+        y_lim = (-10, len(value_columns) + 10)  # Rankings from 1 to number of counties
+
+        # If no county columns are found, provide a message and return
+        if not value_columns:
+            print("No county columns found in the results DataFrame")
+            return
+
+    else:
+        raise ValueError(
+            f"Unknown plot_type: {plot_type}. Must be 'weights', 'communalities', 'indices', or 'rankings'"
+        )
+
+    # Skip if no columns are found for the plot
+    if not value_columns:
+        print(f"No data columns found for plot_type '{plot_type}'")
+        return
+    # Create the figure
+    plt.figure(figsize=(12, 6))
+
+    # Create a mapping of county names to ranks
+    county_ranks = {}
+    for idx, row in original_df.iterrows():
+        county_name = row["County Name"]
+        county_ranks[f"county_{county_name}"] = row["rank"]
+
+    # Sort columns by original rank (ascending - lower rank = higher vulnerability)
+    # Default to median sorting if county not found in original rankings
+    if county_ranks:
+        counties_order = pd.Series(
+            {col: county_ranks.get(col, float("inf")) for col in value_columns}
+        ).sort_values(ascending=False)
+    else:
+        counties_order = results_df[value_columns].median().sort_values(ascending=False)
+
+    # Create violin plot - much simpler than the boxplot with custom outliers
+    sns.violinplot(
+        data=results_df[value_columns],
+        order=counties_order.index,
+        fill=False,
+        palette=["slategray"] * len(value_columns),
+        linewidth=1,
+        inner_kws=dict(box_width=3, whis_width=1),
+    )
+
+    # Add original values as stars
+    # Extract original values based on the plot type
+    original_values = []
+    for i, col in enumerate(counties_order.index):
+        if col.startswith("county_"):
+            county_name = col.split("_")[1]
+            original_row = original_df[original_df["County Name"] == county_name]
+            if not original_row.empty:
+                if plot_type == "rankings":
+                    original_values.append((i, original_row["rank"].values[0]))
+                else:
+                    # Assuming scores are in a column named 'score'
+                    # Adapt this based on your actual column name
+                    original_values.append((i, original_row["score"].values[0]))
+        else:
+            # For non-county columns (like weights), you'll need to adapt this
+            # based on how original values are stored in your original_df
+            pass
+
+    # Plot the original values
+    if original_values:
+        x_vals, y_vals = zip(*original_values)
+        plt.scatter(
+            x_vals,
+            y_vals,
+            marker="*",
+            edgecolor="navy",
+            facecolor="none",
+            s=100,
+            zorder=10,
+            label="Original Value",
+        )
+
+        # Add legend for original values
+        plt.legend(loc="lower right")
+
+    # Use display columns for x-axis labels if available
+    if "value_columns_display" in locals():
+        # Get the display names in the same order as the sorted columns
+        display_names = [
+            value_columns_display[value_columns.index(col)]
+            for col in counties_order.index
+        ]
+        plt.xticks(range(len(value_columns)), display_names, rotation=90)
+    else:
+        # For county columns, make more readable labels
+        if any(col.startswith("county_") for col in value_columns):
+            display_names = [
+                col.split("_")[1] if col.startswith("county_") else col
+                for col in counties_order.index
+            ]
+            plt.xticks(range(len(value_columns)), display_names, rotation=90)
+        else:
+            plt.xticks(range(len(value_columns)), counties_order.index, rotation=90)
+
+    # Customize the plot with appropriate labels
+    plt.xlabel("Counties")
+    plt.ylabel(ylabel)
+
+    # Set y axis limits
+    plt.ylim(y_lim)
+
+    # Add grid for better readability
+    plt.grid(True, axis="y", linestyle="--", alpha=0.7)
+    plt.grid(True, axis="x", linestyle="--", alpha=0.7)
+
+    # Remove the top and right spines for a cleaner look
+    sns.despine()
+
+    # Adjust layout to prevent label cutoff
+    plt.tight_layout()
+
+    # Save the plot with an appropriate filename
+    plt.savefig(os.path.join(folder_path, filename), dpi=300, bbox_inches="tight")
+    plt.close()
+
+
+def analyze_sobol_indices(results_df, problem):
+    """
+    Calculate Sobol sensitivity indices using SALib.
+
+    Parameters
+    ----------
+    results_df : pd.DataFrame
+        DataFrame containing Monte Carlo simulation results
+    problem : dict
+        SALib problem definition
+
+    Returns
+    -------
+    dict
+        Dictionary containing Sobol indices for each output variable
+    """
+
+    # Identify parameter columns and output columns
+    param_cols = problem["names"]
+
+    # Find all numeric output columns
+    output_cols = []
+
+    # County columns (all non-parameter columns that start with "county_")
+    county_cols = [
+        col
+        for col in results_df.columns
+        if col not in param_cols
+        and col.startswith("county_")
+        and pd.api.types.is_numeric_dtype(results_df[col])
+    ]
+
+    # Communality columns (all non-parameter columns that end with "_comm")
+    comm_cols = [
+        col
+        for col in results_df.columns
+        if col not in param_cols
+        and col.endswith("_comm")
+        and pd.api.types.is_numeric_dtype(results_df[col])
+    ]
+
+    output_cols = county_cols + comm_cols
+
+    # Store results for all outputs
+    sensitivity_results = {}
+
+    print(f"\nAnalyzing Sobol sensitivity indices for {len(output_cols)} outputs...")
+
+    # Analyze each output variable
+    for col in output_cols:
+        print(f"Analyzing {col}...")
+        Y = results_df[col].values
+
+        try:
+            # Perform Sobol analysis
+            Si = sobol.analyze(
+                problem, Y, calc_second_order=False, print_to_console=False, seed=42
+            )
+
+            # Store results
+            sensitivity_results[col] = {
+                "S1": {param: Si["S1"][i] for i, param in enumerate(param_cols)},
+                "S1_conf": {
+                    param: Si["S1_conf"][i] for i, param in enumerate(param_cols)
+                },
+                "ST": {param: Si["ST"][i] for i, param in enumerate(param_cols)},
+                "ST_conf": {
+                    param: Si["ST_conf"][i] for i, param in enumerate(param_cols)
+                },
+            }
+        except Exception as e:
+            print(f"Error analyzing {col}: {str(e)}")
+            sensitivity_results[col] = {}
+
+    return sensitivity_results
+
+
+def plot_sobol_indices(
+    sensitivity_results,
+    folder_path,
+    output_type="indices",
+    analysis_type="threshold",
+):
+    """
+    Create scatter plots with confidence intervals for Sobol sensitivity indices.
+    Each parameter gets its own subplot in a single column, with x-axis labels only on the last subplot.
+    Y-axis limits are set to -0.5 to 0.5 for all subplots.
+
+    Parameters
+    ----------
+    sensitivity_results : pd.DataFrame
+        Dataframe containing Sobol sensitivity indices
+    folder_path : str
+        Folder path to save the figures
+    output_type : str
+        Type of outputs to plot ("indices" or "communalities")
+    analysis_type : str, optional
+        Type of analysis: "threshold" or "pca"
+
+    """
+
+    # Filter based on output type
+    if output_type == "indices":
+        df = sensitivity_results[
+            sensitivity_results["output"].str.startswith("county_")
+        ].copy()
+    elif output_type == "communalities":
+        df = sensitivity_results[
+            sensitivity_results["output"].str.endswith("_comm")
+        ].copy()
+    else:
+        df = sensitivity_results.copy()
+
+    if df.empty:
+        print(f"No data found for output type: {output_type}")
+        return
+
+    # Get unique parameters and counties
+    columns_list = list(df.columns[1:])
+    # Extract unique parameters
+    parameters = set()
+    for item in columns_list:
+        # Split by underscore and remove S1/ST/conf parts
+        parts = item.split("_")
+        if parts[0] in ["S1", "ST"]:
+            # If it's a confidence value, skip the 'conf' part
+            if parts[1] == "conf":
+                parameter = "_".join(parts[2:])
+            else:
+                parameter = "_".join(parts[1:])
+            parameters.add(parameter)
+
+    parameters = list(parameters)
+    counties = df["county"].unique()
+
+    # Create x-axis positions
+    x = np.arange(len(counties))
+
+    # Create figure for S1 indices
+    fig, axes = plt.subplots(len(parameters), 1, figsize=(8, 3 * len(parameters)))
+    if len(parameters) == 1:
+        axes = np.array([axes])
+    axes = axes.flatten()
+
+    # Plot first-order indices (S1) with confidence intervals
+    for i, param in enumerate(parameters):
+        ax = axes[i]
+
+        # Extract values and confidence intervals
+        values = df[f"S1_{param}"].values
+        conf = df[f"S1_conf_{param}"].values
+
+        # Plot points without connecting lines
+        ax.scatter(x, values, s=20)
+
+        # Add confidence intervals as error bars
+        ax.errorbar(x, values, yerr=conf, fmt="none", capsize=5)
+
+        # Only show x-axis labels on the last subplot
+        if i == len(parameters) - 1:
+            ax.set_xticks(x)
+            ax.set_xticklabels(counties, rotation=90)
+        else:
+            ax.set_xticks(x)
+            ax.set_xticklabels([])  # Remove x-axis labels
+            ax.tick_params(axis="x", which="both", bottom=False)  # Remove x-axis ticks
+
+        ax.set_title(f"S1: {param}")
+        ax.set_ylabel("Sensitivity Index")
+        ax.grid(True, axis="y", linestyle="--", alpha=0.7)
+        ax.set_ylim(-0.5, 0.5)  # Set y-axis limits
+
+    plt.suptitle(f"First-Order Sobol Sensitivity Indices ({output_type})", y=1.02)
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(folder_path, f"sobol_S1_{output_type}_{analysis_type}.png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+    # Create figure for ST indices
+    fig, axes = plt.subplots(len(parameters), 1, figsize=(8, 3 * len(parameters)))
+    if len(parameters) == 1:
+        axes = np.array([axes])
+    axes = axes.flatten()
+
+    # Plot total effect indices (ST) with confidence intervals
+    for i, param in enumerate(parameters):
+        ax = axes[i]
+
+        # Extract values and confidence intervals
+        values = df[f"ST_{param}"].values
+        conf = df[f"ST_conf_{param}"].values
+
+        # Plot points without connecting lines
+        ax.scatter(x, values, s=20)
+
+        # Add confidence intervals as error bars
+        ax.errorbar(x, values, yerr=conf, fmt="none", capsize=5)
+
+        # Only show x-axis labels on the last subplot
+        if i == len(parameters) - 1:
+            ax.set_xticks(x)
+            ax.set_xticklabels(counties, rotation=90)
+        else:
+            ax.set_xticks(x)
+            ax.set_xticklabels([])  # Remove x-axis labels
+            ax.tick_params(axis="x", which="both", bottom=False)  # Remove x-axis ticks
+
+        ax.set_title(f"ST: {param}")
+        ax.set_ylabel("Sensitivity Index")
+        ax.grid(True, axis="y", linestyle="--", alpha=0.7)
+        ax.set_ylim(0, 1)  # Set y-axis limits
+
+    plt.suptitle(f"Total Effect Sobol Sensitivity Indices ({output_type})", y=1.02)
+    plt.tight_layout()
+    plt.savefig(
+        os.path.join(folder_path, f"sobol_ST_{output_type}_{analysis_type}.png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
+def plot_sobol_variance_decomposition(
+    sensitivity_results, results_df, folder_path, analysis_type="threshold"
+):
+    """
+    Create a stacked bar plot showing actual variance decomposition for each county.
+    Each bar represents the total variance of that county's ranking/score, with
+    colored segments showing actual variance explained by each parameter and
+    the remaining variance due to interactions and higher-order effects.
+
+    Parameters
+    ----------
+    sensitivity_results : Dataframe
+        Dataframe containing Sobol sensitivity indices from analyze_sobol_indices
+    results_df : pd.DataFrame
+        DataFrame with Monte Carlo simulation results containing county columns
+    folder_path : str
+        Folder path to save the figures
+    analysis_type : str, optional
+        Type of analysis: "threshold" or "pca"
+    """
+
+    # Filter for county outputs
+    county_outputs = [
+        county for county in sensitivity_results.index if county.startswith("county_")
+    ]
+
+    if not county_outputs:
+        print("No county outputs found in sensitivity results")
+        return
+
+    # Get parameter columns from sensitivity_results (columns starting with specific suffixes)
+    param_cols = [col for col in sensitivity_results.columns if col.startswith("S1_")]
+
+    # Extract parameter names from column names
+    nb_parameters = int(len(param_cols) / 2)
+    params = [col.split("_", 1)[1] for col in param_cols][:nb_parameters]
+
+    # Calculate actual variance for each county and parameter contribution
+    actual_variances = []  # Total variance for each county
+    variance_components = {
+        param: [] for param in params
+    }  # Actual variance explained by each parameter
+    variance_unexplained = []  # Remaining variance (interactions and higher order)
+    county_labels = []
+
+    for county in county_outputs:
+        # Calculate the actual variance of this county's data
+        county_var = results_df[county].var()
+        actual_variances.append(county_var)
+
+        # Get first-order Sobol indices (S1) for this county
+        variance_fractions = {}
+        for i, param in enumerate(params):
+            variance_fractions[param] = sensitivity_results.loc[county, param_cols[i]]
+
+        # Convert any negative values to 0
+        variance_fractions = {
+            param: max(0, value) for param, value in variance_fractions.items()
+        }
+
+        # Calculate actual variance attributed to each parameter
+        for param in params:
+            # Variance explained by parameter = S1 index * total variance
+            variance_components[param].append(variance_fractions[param] * county_var)
+
+        # Calculate total variance explained by first-order effects
+        explained_var = sum(variance_components[param][-1] for param in params)
+
+        # Calculate remaining unexplained variance
+        unexplained_var = max(0, county_var - explained_var)
+        variance_unexplained.append(unexplained_var)
+
+        # Store county name for display
+        county_labels.append(county.split("_")[1])
+
+    print("Variance:")
+    print(actual_variances)
+
+    # Create x-axis positions
+    x = np.arange(len(county_outputs))
+
+    # Create stacked bar plot
+    bottom = np.zeros(len(county_outputs))
+
+    # Prepare labels
+    if params[0] == "capping":
+        # If the first parameter is "capping", we assume it is a boolean and should be labeled differently
+        params_labels = [
+            "Capping (True/False)",
+            "Skew Threshold",
+            "Variance Threshold",
+            "Aggregation Method",
+            "Mahalanobis Threshold",
+            "Indicator Dropping",
+        ]
+        ncols = 4
+    else:
+        params_labels = [
+            "ADT Threshold",
+            "Detour Threshold",
+            "Waterway Evaluation Threshold",
+            "Scour Criticality Threshold",
+            "Displacement Threshold",
+        ]
+        ncols = 3
+
+    # Create figure
+    plt.figure(figsize=(12, 6))
+
+    # Plot first-order effects for each parameter
+    for i in range(len(params)):
+        param = params[i]
+        plt.bar(x, variance_components[param], bottom=bottom, label=params_labels[i])
+        bottom += variance_components[param]
+
+    # Plot remaining variance
+    plt.bar(
+        x,
+        variance_unexplained,
+        bottom=bottom,
+        label="Interactions & Higher Order",
+        color="gray",
+        alpha=0.5,
+    )
+
+    # Customize the plot
+    # plt.title("Actual Variance Decomposition by County")
+    plt.xlabel("Counties")
+    plt.ylabel("Variance")
+
+    # Clean up county names for display
+    plt.xticks(x, county_labels, rotation=90)
+
+    # Add legend
+    plt.legend(
+        bbox_to_anchor=(0.05, 1.05, 0.9, 0.12),
+        loc="lower left",
+        ncols=ncols,
+        mode="expand",
+    )
+
+    # Add grid
+    plt.grid(True, axis="y", linestyle="--", alpha=0.7)
+
+    # Remove the top and right spines for a cleaner look
+    sns.despine()
+
+    # Adjust layout
+    plt.tight_layout()
+
+    # Save the plot
+    plt.savefig(
+        os.path.join(
+            folder_path, f"sobol_absolute_variance_decomposition_{analysis_type}.png"
+        ),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
+def plot_sobol_total_effects(
+    sensitivity_results, folder_path, analysis_type="threshold"
+):
+    """
+    Create a stacked bar plot showing total effect sensitivity indices (ST) for each county.
+
+    Parameters
+    ----------
+    sensitivity_results : dict
+        Dictionary containing Sobol sensitivity indices from analyze_sobol_indices
+    results_df : pd.DataFrame
+        DataFrame with Monte Carlo simulation results containing county columns
+    folder_path : str
+        Folder path to save the figures
+    analysis_type : str, optional
+        Type of analysis: "threshold" or "pca"
+    """
+    # Filter for county outputs
+    county_outputs = [
+        county for county in sensitivity_results.index if county.startswith("county_")
+    ]
+
+    if not county_outputs:
+        print("No county outputs found in sensitivity results")
+        return
+
+    # Get parameters from the first output (assuming same parameters for all outputs)
+    param_cols = [col for col in sensitivity_results.columns if col.startswith("ST_")]
+
+    # Extract parameter names from column names
+    nb_parameters = int(len(param_cols) / 2)
+    params = [col.split("_", 1)[1] for col in param_cols][:nb_parameters]
+
+    # Prepare data for stacked bar plot
+    ST_values = {param: [] for param in params}
+    county_labels = []
+
+    for county in county_outputs:
+        # Get total effect indices (ST) for this county
+        for i, param in enumerate(params):
+            # Store total effect index, ensuring it's not negative
+            ST_values[param].append(
+                max(0, sensitivity_results.loc[county, param_cols[i]])
+            )
+
+        # Store county name for display
+        county_labels.append(county.split("_")[1])
+
+    # Create x-axis positions
+    x = np.arange(len(county_outputs))
+
+    # Create stacked bar plot
+    bottom = np.zeros(len(county_outputs))
+
+    # Prepare labels
+    if params[0] == "capping":
+        # If the first parameter is "capping", we assume it is a boolean and should be labeled differently
+        params_labels = [
+            "Capping (True/False)",
+            "Skew Threshold",
+            "Variance Threshold",
+            "Aggregation Method",
+            "Mahalanobis Threshold",
+            "Indicator Dropping",
+        ]
+    else:
+        params_labels = [
+            "ADT Threshold",
+            "Detour Threshold",
+            "Waterway Evaluation Threshold",
+            "Scour Criticality Threshold",
+            "Displacement Threshold",
+        ]
+
+    # Create figure
+    plt.figure(figsize=(12, 6))
+
+    # Plot total effect for each parameter
+    for i in range(len(params)):
+        param = params[i]
+        param_values = np.array(ST_values[param])
+        plt.bar(x, param_values, bottom=bottom, label=params_labels[i])
+        bottom = bottom + param_values
+
+    # Customize the plot
+    # plt.title("Total Effect Sensitivity Indices (ST) by County")
+    plt.xlabel("Counties")
+    plt.ylabel("Total Effect Index")
+
+    # Clean up county names for display
+    plt.xticks(x, county_labels, rotation=90)
+
+    # Add legend
+    plt.legend(
+        bbox_to_anchor=(0.15, 1.05, 0.7, 0.12), loc="lower left", ncols=3, mode="expand"
+    )
+
+    # Add grid
+    plt.grid(True, axis="y", linestyle="--", alpha=0.7)
+
+    # Remove the top and right spines for a cleaner look
+    sns.despine()
+
+    # Adjust layout
+    plt.tight_layout()
+
+    # Save the plot
+    plt.savefig(
+        os.path.join(folder_path, f"sobol_total_effects_{analysis_type}.png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.close()
+
+
+def create_sensitivity_summary_table(
+    sensitivity_results, folder_path, analysis_type="threshold"
+):
+    """
+    Create a summary table of sensitivity indices averaged across all counties.
+    The table contains columns for input factors (parameters), first-order indices (S1),
+    total effect indices (ST), and the difference between ST and S1.
+
+    Parameters
+    ----------
+    sensitivity_results : dict
+        Dictionary containing Sobol sensitivity indices from analyze_sobol_indices
+    folder_path : str
+        Folder path to save the CSV file
+    analysis_type : str, optional
+        Type of analysis: "threshold" or "pca"
+    """
+    # Filter for county outputs
+    county_outputs = [
+        out for out in sensitivity_results.keys() if out.startswith("county_")
+    ]
+
+    if not county_outputs:
+        print("No county outputs found in sensitivity results")
+        return
+
+    # Get parameters from the first output
+    params = list(sensitivity_results[county_outputs[0]]["S1"].keys())
+
+    # Initialize data storage
+    summary_data = {
+        "Parameter": [],
+        "First-Order (S1)": [],
+        "Total Effect (ST)": [],
+        "Difference (ST - S1)": [],
+    }
+
+    # Calculate averages for each parameter
+    for param in params:
+        # Get S1 and ST values across all counties
+        s1_values = [
+            sensitivity_results[county]["S1"][param] for county in county_outputs
+        ]
+        st_values = [
+            sensitivity_results[county]["ST"][param] for county in county_outputs
+        ]
+
+        # Remove nans
+        s1_values = [v for v in s1_values if not np.isnan(v)]
+        st_values = [v for v in st_values if not np.isnan(v)]
+
+        # Calculate averages
+        avg_s1 = sum(s1_values) / len(s1_values)
+        avg_st = sum(st_values) / len(st_values)
+        difference = avg_st - avg_s1
+
+        # Store in data dictionary
+        summary_data["Parameter"].append(param)
+        summary_data["First-Order (S1)"].append(avg_s1)
+        summary_data["Total Effect (ST)"].append(avg_st)
+        summary_data["Difference (ST - S1)"].append(difference)
+
+    # Create DataFrame
+    summary_df = pd.DataFrame(summary_data)
+
+    # Sort by Total Effect descending
+    summary_df = summary_df.sort_values(by="Total Effect (ST)", ascending=False)
+
+    # Save to CSV
+    csv_path = os.path.join(folder_path, f"sensitivity_summary_{analysis_type}.csv")
+    summary_df.to_csv(csv_path, index=False)
+
+    print(f"Sensitivity summary table saved to {csv_path}")
+
+    return summary_df
+
+
+def plot_input_distributions(param_samples, param_distributions, folder_path):
+    """Create histograms of input parameter distributions for verification."""
+    for param in param_distributions:
+        values = [sample[param] for sample in param_samples]
+
+        # Convert boolean values to strings for plotting
+        if all(isinstance(x, bool) for x in values):
+            values = ["True" if x else "False" for x in values]
+
+        plt.figure(figsize=(8, 6))
+        plt.hist(values, bins=30, alpha=0.7)
+        plt.title(f"Distribution of {param}")
+        plt.xlabel("Value")
+        plt.ylabel("Frequency")
+        plt.savefig(os.path.join(folder_path, f"input_dist_{param}.png"))
+        plt.close()
+
+
+def verify_sobol_properties(param_samples, param_ranges):
+    """Verify that Sobol sequences have expected properties."""
+    results = {}
+    for param in param_ranges:
+        values = [sample[param] for sample in param_samples]
+        if isinstance(param_ranges[param], list):
+            # Count occurrences of each category
+            counts = {val: values.count(val) for val in param_ranges[param]}
+            # Calculate coefficient of variation of counts (should be close to 0)
+            mean_count = sum(counts.values()) / len(counts)
+            std_dev = np.std(list(counts.values()))
+            results[param] = {
+                "uniformity": std_dev / mean_count if mean_count > 0 else float("inf"),
+                "counts": counts,
+            }
+        else:
+            results[param] = {
+                "min": min(values),
+                "max": max(values),
+                "mean": np.mean(values),
+                "median": np.median(values),
+            }
+    return results

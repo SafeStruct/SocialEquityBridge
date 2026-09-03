@@ -1,0 +1,1187 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.stats import median_abs_deviation, pearsonr, chi2
+import seaborn as sns
+from sklearn.covariance import MinCovDet
+from sklearn.preprocessing import StandardScaler, PowerTransformer
+
+sub_indicator_names = [
+    "Traffic load",
+    "Strategic importance",
+    "Detour impact",
+    "Structural vulnerability",
+    "Natural hazard vulnerability",
+    "Capacity issues",
+    "Lack of monitoring",
+    "Inspection burden",
+    "Economic pressure",
+]
+
+
+def plot_variance(pca, output_path=None, figsize=(8, 6), dpi=600):
+    """
+    Plot explained variance ratio and cumulative explained variance.
+
+    Parameters:
+    -----------
+    pca : sklearn.decomposition.PCA
+        Fitted PCA object
+    output_path : str, optional
+        Path to save the plot
+    figsize : tuple, optional
+        Figure size (width, height)
+    dpi : int, optional
+        DPI for saved figure
+
+    Returns:
+    --------
+    matplotlib.figure.Figure
+        Figure object if output_path is None
+    """
+    plt.figure(figsize=figsize)
+    n_components = len(pca.explained_variance_ratio_)
+
+    plt.plot(range(1, n_components + 1), pca.explained_variance_ratio_, marker="o")
+    plt.plot(
+        range(1, n_components + 1), pca.explained_variance_ratio_.cumsum(), marker="o"
+    )
+
+    plt.xlabel("Principal Component Number")
+    plt.ylabel("Explained Variance Ratio")
+    plt.legend(["Explained Variance Ratio", "Cumulative Explained Variance Ratio"])
+    plt.title("Explained Variance Ratio")
+    plt.grid()
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+        plt.close()
+        return None
+    return plt.gcf()
+
+
+def plot_pca_components(
+    pca_data,
+    target_df,
+    target_column,
+    components=(1, 2),
+    targets=["P", "G", "F"],
+    colors=["r", "g", "b"],
+    output_path=None,
+    figsize=(8, 8),
+    dpi=600,
+):
+    """
+    Plot PCA components with target categories.
+
+    Parameters:
+    -----------
+    pca_data : array-like
+        PCA transformed data
+    target_df : pd.DataFrame
+        DataFrame containing target categories
+    target_column : str
+        Column name containing target categories
+    components : tuple
+        Which components to plot (e.g., (1,2) for PC1 vs PC2)
+    targets : list
+        List of target categories
+    colors : list
+        List of colors for each target
+    output_path : str, optional
+        Path to save the plot
+    figsize : tuple
+        Figure size
+    dpi : int
+        DPI for saved figure
+    """
+    # Prepare data
+    pc1, pc2 = components
+    princ_comp_columns = [
+        f"principal component {i+1}" for i in range(pca_data.shape[1])
+    ]
+    principalDf = pd.DataFrame(data=pca_data, columns=princ_comp_columns)
+
+    # Create plot
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(1, 1, 1)
+    ax.set_xlabel(f"Principal Component {pc1}", fontsize=15)
+    ax.set_ylabel(f"Principal Component {pc2}", fontsize=15)
+    ax.set_title(f"PCA Components {pc1} vs {pc2}", fontsize=20)
+
+    # Plot each target category
+    for target, color in zip(targets, colors):
+        indices = target_df[target_column] == target
+        ax.scatter(
+            principalDf.loc[indices, f"principal component {pc1}"],
+            principalDf.loc[indices, f"principal component {pc2}"],
+            c=color,
+            s=50,
+        )
+
+    ax.legend(targets)
+    ax.grid()
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+        plt.close()
+        return None
+    return fig
+
+
+def highlight_values(val, threshold=0.5):
+    # Function to highlight values above 0.5
+    color = "yellow" if abs(val) > threshold else ""
+    return f"background-color: {color}"
+
+
+def highlight_max(s):
+    is_max = s == s.max()
+    return ["background-color: yellow" if v else "" for v in is_max]
+
+
+def create_explained_variance_table(pca, threshold=1, output_path=None):
+    """
+    Create and save explained variance table for PCA results.
+
+    Parameters:
+    -----------
+    pca : sklearn.decomposition.PCA
+        Fitted PCA object
+    threshold : float
+        Threshold for highlighting values
+    output_path : str, optional
+        Path to save HTML table
+
+    Returns:
+    --------
+    pd.DataFrame
+        Styled DataFrame with explained variance information
+    """
+    # Create DataFrame
+    explained_variance = pd.DataFrame(
+        {
+            "Total Eigenvalue": pca.explained_variance_,
+            "Explained Variance": pca.explained_variance_ratio_,
+        }
+    )
+
+    # Set index
+    explained_variance.index.name = "Component"
+    explained_variance.index += 1
+
+    # Add cumulative variance
+    explained_variance["Cumulative Explained Variance"] = explained_variance[
+        "Explained Variance"
+    ].cumsum()
+
+    # Apply highlighting
+    styled_df = explained_variance.style.map(
+        lambda val: highlight_values(val, threshold=threshold)
+    )
+
+    # Save if path provided
+    if output_path:
+        styled_df.to_html(output_path)
+
+    return styled_df
+
+
+def plot_scree(pca, output_path=None, figsize=(8, 6), dpi=600):
+    """Plot scree plot showing eigenvalues for each component."""
+
+    n_components = len(pca.explained_variance_)
+
+    plt.figure(figsize=figsize)
+    plt.plot(range(1, n_components + 1), pca.explained_variance_, marker="o")
+
+    plt.xlabel("Component Number")
+    plt.ylabel("Eigenvalue")
+    plt.title("Scree Plot")
+    plt.grid()
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+        plt.close()
+        return None
+    return plt.gcf()
+
+
+def create_pca_components_table(pca, df, output_path=None, threshold=0.3):
+    """
+    Create table showing feature contributions to principal components.
+
+    Parameters:
+    -----------
+    pca : sklearn.decomposition.PCA
+        Fitted PCA object
+    df : pd.DataFrame
+        Original features DataFrame
+    output_path : str, optional
+        Path to save HTML table
+    threshold : float
+        Threshold for highlighting values
+
+    Returns:
+    --------
+    pd.DataFrame
+        Styled DataFrame with PCA components
+    """
+
+    if type(pca.components_) is not np.ndarray:
+        # Create DataFrame from components
+        pca_components = pca.components_.values.T
+    else:
+        pca_components = pca.components_
+
+    # Create DataFrame from components
+    pc_values = pd.DataFrame(pca_components, columns=df.columns)
+
+    # Transpose and rename columns
+    pc_values = pc_values.T
+    pc_values.columns = [f"PC{i+1}" for i in range(pc_values.shape[1])]
+    pc_values.index.name = "Feature"
+
+    # Apply highlighting
+    styled_df = pc_values.style.map(
+        lambda val: highlight_values(val, threshold=threshold)
+    )
+
+    # Save if path provided
+    if output_path:
+        styled_df.to_html(output_path)
+
+    return styled_df
+
+
+def create_data_characteristics(
+    df,
+    output_path=None,
+    percentiles=[0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95],
+    skewness_threshold=2,
+    verbose=True,
+):
+    """
+    Create comprehensive data characteristics table.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame
+    output_path : str, optional
+        Path to save HTML table
+    percentiles : list, optional
+        List of percentiles to calculate
+    skewness_threshold : float, optional
+        Threshold for highlighting high skewness
+
+    Returns:
+    --------
+    pd.DataFrame
+        DataFrame with data characteristics
+    """
+    # Calculate basic statistics
+    data_characteristics = df.describe(percentiles=percentiles).T.apply(
+        lambda s: s.apply("{:,.2f}".format)
+    )
+
+    # Add additional statistics
+    data_characteristics["missing_values"] = df.isnull().sum()
+    data_characteristics["unique_values"] = df.nunique()
+    data_characteristics["not_missing"] = df.count()
+    data_characteristics["median"] = df.median()
+    data_characteristics["mad"] = pd.DataFrame(
+        median_abs_deviation(df, axis=0, scale=1.0),
+        index=df.columns,
+        columns=["MAD"],
+    )
+    data_characteristics["skewness"] = df.skew()
+    data_characteristics["variance"] = df.var()
+
+    # Reorder columns
+    data_characteristics = data_characteristics[
+        [
+            "missing_values",
+            "unique_values",
+            "not_missing",
+            "median",
+            "mad",
+            "skewness",
+            "variance",
+            "mean",
+            "std",
+            "min",
+            "5%",
+            "10%",
+            "25%",
+            "50%",
+            "75%",
+            "90%",
+            "95%",
+            "max",
+        ]
+    ]
+
+    # Round values
+    data_characteristics = data_characteristics.round(2)
+    if verbose:
+        # Print skewness summary
+        print("\nVariables with high negative skewness:")
+        print(
+            data_characteristics[data_characteristics["skewness"] < -skewness_threshold]
+        )
+        print("\nVariables with high positive skewness:")
+        print(
+            data_characteristics[data_characteristics["skewness"] > skewness_threshold]
+        )
+
+        # Save if path provided
+        if output_path:
+            data_characteristics.to_html(output_path)
+
+    return data_characteristics
+
+
+def plot_correlation_matrix(
+    df,
+    output_path=None,
+    figsize=(10, 8),
+    dpi=600,
+    cmap="coolwarm",
+    fmt=".2f",
+    vmin=-1,
+    vmax=1,
+    mark_significant=True,
+    bubble_scale=1000,  # Scale factor for bubble size
+):
+    """
+    Plot correlation matrix heatmap with bubble representation in upper triangle.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame
+    output_path : str, optional
+        Path to save plot
+    figsize : tuple
+        Figure size (width, height)
+    dpi : int
+        DPI for saved figure
+    cmap : str
+        Colormap for heatmap
+    fmt : str
+        Format for annotation values
+    vmin, vmax : float
+        Value range for colormap
+    mark_significant : bool, optional (default=True)
+        If True, marks statistically significant correlations (p < 0.05)
+    bubble_scale : float, optional (default=1000)
+        Scale factor for bubble size
+
+    Returns:
+    --------
+    matplotlib.figure.Figure if output_path is None
+    """
+    # Calculate correlation matrix
+    cor_matrix = df.corr()
+
+    # Create plot
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Mask for lower triangle (to show text)
+    mask_lower = np.triu(np.ones_like(cor_matrix, dtype=bool), k=1)
+
+    if mark_significant:
+        # First prepare p-values matrix
+        p_matrix = np.ones_like(cor_matrix, dtype=float)
+
+        # Calculate all p-values
+        for i in range(len(cor_matrix.index)):
+            for j in range(len(cor_matrix.columns)):
+                if i != j:  # Skip diagonal
+                    _, p_val = pearsonr(
+                        df[cor_matrix.index[i]], df[cor_matrix.columns[j]]
+                    )
+                    p_matrix[i, j] = p_val
+
+        # Create significance mask (True where p < 0.05)
+        sig_mask = p_matrix < 0.05
+
+        # Initialize empty annotation array of strings (object dtype)
+        annot_matrix = np.empty_like(cor_matrix, dtype=object)
+
+        # Fill annotation matrix with formatted strings
+        for i in range(len(cor_matrix.index)):
+            for j in range(len(cor_matrix.columns)):
+                value = cor_matrix.iloc[i, j]
+                # Format with or without asterisk based on significance
+                if i != j and sig_mask[i, j]:
+                    annot_matrix[i, j] = f"{value:.2f}*"
+                else:
+                    annot_matrix[i, j] = f"{value:.2f}"
+
+        # Create heatmap with custom annotations (lower triangle)
+        sns.heatmap(
+            cor_matrix,
+            mask=mask_lower,  # Show only lower triangle for text
+            annot=annot_matrix,
+            fmt="",  # Empty format when using pre-formatted annotations
+            cmap=cmap,
+            ax=ax,
+            vmax=vmax,
+            vmin=vmin,
+            cbar_kws={"shrink": 0.8},
+            annot_kws={"fontsize": 14},
+        )
+
+        # Add legend for significance marker
+        # plt.figtext(0.4, 0.98, "* indicates p < 0.05", ha="center")
+    else:
+        # Use default formatting for lower triangle
+        sns.heatmap(
+            cor_matrix,
+            mask=mask_lower,
+            annot=True,
+            cmap=cmap,
+            fmt=fmt,
+            ax=ax,
+            vmax=vmax,
+            vmin=vmin,
+            cbar_kws={"shrink": 0.8},
+        )
+
+    # Now add bubbles for the upper triangle
+    # Mask for upper triangle (to show bubbles)
+    mask_upper = np.tril(np.ones_like(cor_matrix, dtype=bool))
+
+    # Get coordinates for all cells
+    xx, yy = np.meshgrid(range(len(cor_matrix)), range(len(cor_matrix)))
+
+    # Get x, y coordinates and values excluding masked cells
+    x = xx[~mask_upper]
+    y = yy[~mask_upper]
+    size = np.abs(cor_matrix.values[~mask_upper]) * bubble_scale
+    colors = cor_matrix.values[~mask_upper]
+
+    # Plot bubbles
+    _ = ax.scatter(
+        x + 0.5,  # Center in cells
+        y + 0.5,  # Center in cells
+        s=size,
+        c=colors,
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        alpha=0.7,
+        edgecolors="black",
+        linewidths=0.5,
+    )
+
+    # Set font sizes for all texts
+    font_size = 14
+    ax.tick_params(axis="both", which="major", labelsize=font_size)
+    ax.set_xlabel(ax.get_xlabel(), fontsize=font_size + 2)
+    ax.set_ylabel(ax.get_ylabel(), fontsize=font_size + 2)
+    ax.set_title(ax.get_title(), fontsize=font_size + 4)
+    cbar = ax.collections[0].colorbar
+    cbar.ax.tick_params(labelsize=font_size)
+
+    # Set labels and adjust layout
+    # Split labels into two lines at the first space
+    def split_label(label):
+        parts = label.split()
+        if len(parts) > 1:
+            return parts[0] + "\n" + " ".join(parts[1:])
+        else:
+            return label
+
+    split_labels = [split_label(lbl) for lbl in sub_indicator_names]
+    ax.set_xticks(np.arange(len(cor_matrix.columns)) + 0.5)
+    ax.set_yticks(np.arange(len(cor_matrix.index)) + 0.5)
+    ax.set_xticklabels(split_labels, fontsize=font_size)
+    ax.set_yticklabels(split_labels, fontsize=font_size)
+
+    # Align x and y tick labels to the right
+    for label in ax.get_xticklabels():
+        label.set_ha("right")
+    for label in ax.get_yticklabels():
+        label.set_ha("right")
+
+    # Add a note about bubbles
+    plt.figtext(
+        0.75,
+        0.98,
+        "Bubble size represents correlation strength",
+        ha="center",
+        fontsize=font_size,
+    )
+    if mark_significant:
+        plt.figtext(0.4, 0.98, "* indicates p < 0.05", ha="center", fontsize=font_size)
+
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=dpi, bbox_inches="tight")
+        plt.close()
+        return None
+
+    return fig
+
+
+def plot_distributions(
+    df, plot_type="both", output_path=None, figsize_multiplier=(10, 2), dpi=600
+):
+    """
+    Plot distributions for each column in DataFrame.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Input DataFrame
+    plot_type : str
+        'box', 'hist', or 'both'
+    output_path : str
+        Path prefix for saving plots
+    figsize_multiplier : tuple
+        Base size to multiply by number of columns
+    dpi : int
+        DPI for saved figures
+    """
+    if plot_type in ["box", "both"]:
+        fig, axes = plt.subplots(
+            nrows=len(df.columns),
+            ncols=1,
+            figsize=(figsize_multiplier[0], figsize_multiplier[1] * len(df.columns)),
+        )
+
+        for ax, column in zip(axes, df.columns):
+            sns.boxplot(x=df[column], ax=ax, orient="h")
+            ax.set_title(f"Box Plot of {column}")
+
+        plt.tight_layout()
+        if output_path:
+            plt.savefig(f"{output_path}_boxplot.png", dpi=dpi, bbox_inches="tight")
+            plt.close()
+
+    if plot_type in ["hist", "both"]:
+        fig, axes = plt.subplots(
+            nrows=len(df.columns),
+            ncols=1,
+            figsize=(figsize_multiplier[0], figsize_multiplier[1] * len(df.columns)),
+        )
+
+        for ax, column in zip(axes, df.columns):
+            sns.histplot(df[column], ax=ax)
+            ax.set_title(f"Distribution of {column}")
+
+        plt.tight_layout()
+        if output_path:
+            plt.savefig(f"{output_path}_histogram.png", dpi=dpi, bbox_inches="tight")
+            plt.close()
+
+
+def directional_minmax_scale(df, positive_cols=None, negative_cols=None):
+    """
+    Scale features considering their directional relationship
+
+    Parameters:
+    df (pd.DataFrame): Input dataframe
+    positive_cols (list): Columns where higher values indicate better outcomes
+    negative_cols (list): Columns where lower values indicate better outcomes
+
+    Returns:
+    pd.DataFrame: Scaled dataframe
+    """
+    if positive_cols is None:
+        positive_cols = []
+    if negative_cols is None:
+        negative_cols = []
+
+    scaled_df = df.copy()
+
+    # Validate columns
+    all_cols = positive_cols + negative_cols
+    if not set(all_cols).issubset(df.columns):
+        raise ValueError("Specified columns not found in dataframe")
+    if len(set(positive_cols) & set(negative_cols)) > 0:
+        raise ValueError("Column cannot be both positive and negative")
+
+    # Scale positive columns
+    for col in positive_cols:
+        min_val = df[col].min()
+        max_val = df[col].max()
+        scaled_df[col] = (df[col] - min_val) / (max_val - min_val)
+
+    # Scale negative columns
+    for col in negative_cols:
+        min_val = df[col].min()
+        max_val = df[col].max()
+        scaled_df[col] = (max_val - df[col]) / (max_val - min_val)
+
+    return scaled_df
+
+
+def highlight_diagonal(data):
+    # Create array of indices
+    n = len(data)
+    # Create diagonal mask using numpy arange
+    diagonal_mask = np.eye(n, dtype=bool)
+    return pd.DataFrame(
+        np.where(diagonal_mask, "background-color: yellow", ""),
+        index=data.index,
+        columns=data.columns,
+    )
+
+
+def varimax_rotation(loadings, max_iter=100, tol=1e-6):
+    """
+    Perform varimax rotation on loadings matrix.
+
+    Parameters:
+    -----------
+    loadings : array-like
+        Matrix of factor loadings
+    max_iter : int, optional (default=100)
+        Maximum number of iterations
+    tol : float, optional (default=1e-6)
+        Convergence tolerance
+
+    Returns:
+    --------
+    array-like
+        Rotated loadings matrix
+    """
+    X = loadings.copy()
+    n_rows = X.shape[0]
+
+    # Kaiser normalization
+    communalities_sqrt = np.sqrt(np.sum(X**2, axis=1))
+    X = (X.T / communalities_sqrt).T
+
+    # Initialize rotation matrix
+    rotation_matrix = np.eye(X.shape[1])
+    var = 0
+
+    # Iterative rotation
+    for _ in range(max_iter):
+        Xrot = np.dot(X, rotation_matrix)
+        squared = Xrot**2
+        factor_vars = squared.sum(axis=0) / n_rows
+
+        # Calculate rotation criterion
+        umat = np.dot(X.T, Xrot**3 - np.outer(np.ones(n_rows), factor_vars) * Xrot)
+
+        # Update rotation using SVD
+        u, s, v = np.linalg.svd(umat)
+        rotation_matrix = np.dot(u, v)
+
+        # Check convergence
+        var_new = np.sum(s)
+        if var != 0 and var_new < var * (1 + tol):
+            break
+        var = var_new
+
+    # Apply final rotation and de-normalize
+    X = np.dot(X, rotation_matrix)
+    rotated_loadings = (X.T * communalities_sqrt).T
+
+    return rotated_loadings
+
+
+def calculate_mahalanobis(x, data):
+    """
+    Calculate Mahalanobis distance for each point in a dataset.
+
+    Parameters:
+    -----------
+    x : array-like
+        Data for which to calculate Mahalanobis distances
+    data : array-like
+        Reference data to calculate mean vector and covariance matrix
+
+    Returns:
+    --------
+    numpy.ndarray
+        Array of Mahalanobis distances
+    """
+    # Calculate the mean vector and covariance matrix
+    x_minus_mu = x - np.mean(data, axis=0)
+    cov = np.cov(data.T)
+
+    # Handle singular covariance matrix
+    try:
+        inv_covmat = np.linalg.inv(cov)
+    except np.linalg.LinAlgError:
+        # Use pseudo-inverse if matrix is singular
+        inv_covmat = np.linalg.pinv(cov)
+
+    # Calculate Mahalanobis distance for each point
+    mahalanobis_dist = np.sqrt(
+        np.sum(np.dot(x_minus_mu, inv_covmat) * x_minus_mu, axis=1)
+    )
+
+    return mahalanobis_dist
+
+
+def calculate_robust_mahalanobis(x, data):
+    """
+    Calculate robust Mahalanobis distance for each point in a dataset using MCD estimator.
+
+    Parameters:
+    -----------
+    x : array-like
+        Data for which to calculate Mahalanobis distances
+    data : array-like
+        Reference data to calculate robust location and scatter matrix
+
+    Returns:
+    --------
+    numpy.ndarray
+        Array of robust Mahalanobis distances
+    """
+    # Fit MCD estimator
+    mcd = MinCovDet(random_state=42)
+    mcd.fit(data)
+
+    # Get robust location and covariance matrix
+    robust_location = mcd.location_
+    robust_cov = mcd.covariance_
+
+    # Calculate Mahalanobis distance using robust estimates
+    x_minus_mu = x - robust_location
+
+    # Handle singular covariance matrix
+    try:
+        inv_covmat = np.linalg.inv(robust_cov)
+    except np.linalg.LinAlgError:
+        # Use pseudo-inverse if matrix is singular
+        inv_covmat = np.linalg.pinv(robust_cov)
+
+    # Calculate robust Mahalanobis distance for each point
+    mahalanobis_dist = np.sqrt(
+        np.sum(np.dot(x_minus_mu, inv_covmat) * x_minus_mu, axis=1)
+    )
+
+    return mahalanobis_dist
+
+
+def plot_county_scatter_matrix(
+    df,
+    save_path=None,
+    highlight_outliers=False,
+    mark_multivariate_outliers=False,
+    mahalanobis_threshold=None,
+    p_value=0.975,  # Added parameter with default 0.975
+    robust_mahalanobis=False,
+    figsize=(15, 10),
+    marker_size=30,
+    grid_alpha=0.3,
+):
+    """
+    Create a scatter plot matrix with county index on x-axis and variables on y-axis.
+
+    Parameters:
+    -----------
+    df : pandas DataFrame
+        DataFrame containing the variables to plot
+    save_path : str, optional
+        Path to save the figure
+    highlight_outliers : bool, default=False
+        Whether to highlight univariate outliers in red
+    mark_multivariate_outliers : bool, default=False
+        Whether to mark multivariate outliers with a star
+    mahalanobis_threshold : float, optional
+        Threshold for Mahalanobis distance to identify outliers.
+        If None, uses chi-square critical value with p_value
+    p_value : float, default=0.975
+        P-value to use for chi-square critical value when mahalanobis_threshold is None
+    robust_mahalanobis : bool, default=False
+        Whether to use robust Mahalanobis distance calculation
+    figsize : tuple, default=(15, 10)
+        Figure size
+    marker_size : int, default=30
+        Size of scatter points
+    grid_alpha : float, default=0.3
+        Transparency of grid lines
+
+    Returns:
+    --------
+    fig, axes : matplotlib figure and axes objects
+    """
+    # Create subplots
+    fig, axes = plt.subplots(3, 3, figsize=figsize)
+    axes = axes.flatten()
+
+    # Calculate multivariate outliers if requested
+    multivariate_outliers = np.zeros(len(df), dtype=bool)
+    if mark_multivariate_outliers:
+        # Calculate Mahalanobis distances
+        if robust_mahalanobis:
+            mahalanobis_dist = calculate_robust_mahalanobis(df.values, df.values)
+        else:
+            mahalanobis_dist = calculate_mahalanobis(df.values, df.values)
+
+        # If threshold not provided, use chi-square critical value with provided p_value
+        if mahalanobis_threshold is None:
+            # Get chi-square critical value with specified p_value and df=number of variables
+            mahalanobis_threshold = chi2.ppf(p_value, df.shape[1])
+
+        # Mark points as outliers if they exceed the threshold
+        multivariate_outliers = mahalanobis_dist > mahalanobis_threshold
+
+    for i, col in enumerate(df.columns):
+        # Identify univariate outliers if requested
+        if highlight_outliers:
+            Q1 = df[col].quantile(0.25)
+            Q3 = df[col].quantile(0.75)
+            IQR = Q3 - Q1
+            is_outlier = (df[col] < (Q1 - 1.5 * IQR)) | (df[col] > (Q3 + 1.5 * IQR))
+
+            # Plot regular points
+            axes[i].scatter(
+                df.index[~is_outlier],
+                df.loc[~is_outlier, col],
+                color="blue",
+                alpha=0.7,
+                s=marker_size,
+            )
+
+            # Plot outliers in red
+            axes[i].scatter(
+                df.index[is_outlier],
+                df.loc[is_outlier, col],
+                color="red",
+                alpha=0.7,
+                s=marker_size,
+            )
+        else:
+            # Standard plot without outlier highlighting
+            sns.scatterplot(data=df, x=df.index, y=col, ax=axes[i], s=marker_size)
+
+        # Mark multivariate outliers with stars
+        if mark_multivariate_outliers and np.any(multivariate_outliers):
+            axes[i].scatter(
+                df.index[multivariate_outliers],
+                df.loc[multivariate_outliers, col],
+                marker="*",
+                color="green",
+                s=marker_size * 2,
+                label="Multivariate Outlier" if i == 0 else "",
+            )
+
+        # Set better labels
+        axes[i].set_title(col)
+        axes[i].set_xlabel("County Index")
+        axes[i].set_ylabel(col)
+
+        # Add vertical grid lines
+        axes[i].grid(True, axis="x", linestyle="-", alpha=grid_alpha)
+        # Add horizontal grid lines
+        axes[i].grid(True, axis="y", linestyle="--", alpha=grid_alpha)
+
+        # add vertical line at index=7
+        axes[i].axvline(x=7, color="gray", linestyle="--", alpha=0.5)
+
+        # Add legend if this is the first plot with multivariate outliers
+        if mark_multivariate_outliers and i == 0 and np.any(multivariate_outliers):
+            axes[i].legend()
+
+    plt.tight_layout()
+
+    # Save figure if path provided
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+
+    return fig, axes
+
+
+def calculate_vulnerability_scores(
+    scaled_county_level_data,
+    pcfa_weights,
+    aggregation_method="complex",
+    return_rankings=False,
+):
+    """
+    Calculate vulnerability scores using either simplified or complex aggregation method.
+
+    Parameters:
+    -----------
+    scaled_county_level_data : pandas.DataFrame
+        Pre-processed and scaled county-level data
+    pcfa_weights : pandas.DataFrame
+        Weights derived from PCFA analysis
+    aggregation_method : str, default="complex"
+        Method to use for aggregation, either "simplified" or "complex"
+    return_rankings : bool, default=False
+        If True, returns rankings (1 to n) instead of normalized scores (0 to 1)
+
+    Returns:
+    --------
+    pandas.DataFrame
+        Normalized final vulnerability scores or rankings
+    """
+    # if COUNTY_CODE_003 in columns then drop it
+    if "COUNTY_CODE_003" in scaled_county_level_data.columns:
+        scaled_county_level_data = scaled_county_level_data.drop(
+            columns=["COUNTY_CODE_003"]
+        )
+
+    if "Feature" in pcfa_weights.columns:
+        pcfa_weights = pcfa_weights.drop(columns=["Feature"])
+
+    if aggregation_method == "simplified":
+        # Multiply all scaled values by weights at once
+        weighted_values = scaled_county_level_data * pcfa_weights["Final_Weight"]
+
+        final_scores = weighted_values.sum(axis=1)
+    else:
+        rotated_variance_ratio = pcfa_weights.iloc[-1, 0:-1].values
+        pcfa_weights_subset = pcfa_weights.iloc[:-1, :-1]
+
+        for i in range(1, len(pcfa_weights_subset.columns)):
+            # print("Getting scores for factor", i)
+            factor = pcfa_weights_subset[f"Load_sq_scld_{i}"].iloc[:9]
+            factor_scores = scaled_county_level_data * factor.values
+            factor_scores = factor_scores.sum(axis=1)
+            factor_scores = factor_scores * rotated_variance_ratio[i]
+            if i == 1:
+                final_scores = factor_scores
+            else:
+                final_scores += factor_scores
+
+    final_scores = pd.DataFrame(final_scores, columns=["final_score"])
+
+    if return_rankings:
+        # Convert to rankings (1 is highest vulnerability, n is lowest)
+        final_scores = final_scores.rank(ascending=False, method="min")
+    else:
+        # Normalize to 0-1 range
+        final_scores = (final_scores - final_scores.min()) / (
+            final_scores.max() - final_scores.min()
+        )
+
+    return final_scores
+
+
+def scale_data(df, method="standard", params=None, return_params=False):
+    """
+    Scale data using either standard or robust scaling.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame to scale
+    method : str, default="standard"
+        Scaling method, either "standard" or "robust"
+    params : dict, optional
+        Pre-calculated parameters for scaling (means/medians and stds/MADs)
+    return_params : bool, default=False
+        Whether to return the scaling parameters along with scaled data
+
+    Returns:
+    --------
+    pd.DataFrame or tuple
+        Scaled DataFrame with same columns and index as input
+        If return_params=True, also returns a dict with scaling parameters
+    """
+    if method == "standard":
+        if params is None:
+            # Calculate parameters from this dataset
+            scaler = StandardScaler()
+            scaled_data = scaler.fit_transform(df)
+
+            # Store parameters for potential reuse
+            params = {"mean": scaler.mean_, "scale": scaler.scale_}
+        else:
+            # Use provided parameters
+            scaled_data = (df - params["mean"]) / params["scale"]
+
+        scaled_df = pd.DataFrame(scaled_data, columns=df.columns, index=df.index)
+
+    elif method == "robust":
+        if params is None:
+            # Calculate parameters from this dataset
+            medians = np.median(df, axis=0)
+            mads = median_abs_deviation(df, axis=0, scale=1.0)
+            mads[mads == 0] = 1  # Avoid division by zero
+
+            # Store parameters for potential reuse
+            params = {"median": medians, "mad": mads}
+        else:
+            # Use provided parameters
+            medians = params["median"]
+            mads = params["mad"]
+
+        scaled_data = (df - medians) / mads
+        scaled_df = pd.DataFrame(scaled_data, columns=df.columns, index=df.index)
+    else:
+        raise ValueError("Method must be either 'standard' or 'robust'")
+
+    if return_params:
+        return scaled_df, params
+    else:
+        return scaled_df
+
+
+def transform_skewed_variables(
+    df,
+    skew_threshold=1.0,
+    verbose=False,
+    pre_fitted_transformer=None,
+    return_transformer=False,
+):
+    """
+    Transform variables with skewness exceeding the threshold using Yeo-Johnson transformation.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame containing variables to transform
+    skew_threshold : float, default=1.0
+        Threshold for absolute skewness value above which variables will be transformed
+    verbose : bool, default=False
+        Whether to print information about transformations
+    pre_fitted_transformer : dict, optional
+        Pre-fitted transformer and column list to apply consistent transformations
+    return_transformer : bool, default=False
+        Whether to return the transformer info along with the transformed DataFrame
+
+    Returns:
+    --------
+    pd.DataFrame or tuple
+        DataFrame with skewed variables transformed.
+        If return_transformer=True, returns (DataFrame, transformer_info)
+    """
+    transformed_df = df.copy()
+
+    # Initialize transformer_info with a consistent structure
+    transformer_info = {"transformer": None, "columns": []}
+
+    if pre_fitted_transformer is None:
+        # Calculate skewness for each column
+        skewness = transformed_df.skew()
+        if verbose:
+            print("Skew before transformation:\n", skewness)
+
+        # Identify columns with skewness above threshold
+        columns_to_transform = skewness[abs(skewness) > skew_threshold].index.tolist()
+
+        if columns_to_transform:
+            if verbose:
+                print("\nColumns with high skewness:", columns_to_transform)
+
+            # Apply Yeo-Johnson transformation
+            yeojohnson_transformer = PowerTransformer(
+                method="yeo-johnson", standardize=False
+            )
+            transformed_df[columns_to_transform] = yeojohnson_transformer.fit_transform(
+                transformed_df[columns_to_transform]
+            )
+
+            # Update transformer_info
+            transformer_info["transformer"] = yeojohnson_transformer
+            transformer_info["columns"] = columns_to_transform
+
+            if verbose:
+                print("\nAfter Yeo-Johnson transformation:")
+                print(transformed_df[columns_to_transform].skew())
+        elif verbose:
+            print("No columns found with skewness above threshold.")
+    else:
+        # Use pre-fitted transformer
+        transformer = pre_fitted_transformer["transformer"]
+        columns = pre_fitted_transformer["columns"]
+
+        # Update transformer_info
+        transformer_info["transformer"] = transformer
+        transformer_info["columns"] = columns
+
+        # Only transform if columns exist in this dataframe
+        columns_present = [col for col in columns if col in transformed_df.columns]
+        if columns_present:
+            transformed_df[columns_present] = transformer.transform(
+                transformed_df[columns_present]
+            )
+
+            if verbose:
+                print(
+                    f"Applied pre-fitted transformation to {len(columns_present)} columns"
+                )
+
+    if return_transformer:
+        return transformed_df, transformer_info
+    return transformed_df
+
+
+def cap_outliers(
+    df,
+    iqr_multiplier=1.5,
+    verbose=False,
+    pre_calculated_bounds=None,
+    return_bounds=False,
+):
+    """
+    Cap outliers based on the IQR method.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        DataFrame containing variables to cap
+    iqr_multiplier : float, default=1.5
+        Multiplier for IQR to determine outlier boundaries
+    verbose : bool, default=False
+        Whether to print information about capping
+    pre_calculated_bounds : dict, optional
+        Dictionary with pre-calculated lower and upper bounds for each column
+    return_bounds : bool, default=False
+        Whether to return the bounds along with the capped DataFrame
+
+    Returns:
+    --------
+    pd.DataFrame or tuple
+        DataFrame with outliers capped.
+        If return_bounds=True, returns (DataFrame, bounds)
+    """
+    capped_df = df.copy()
+    bounds = {}
+
+    for col in capped_df.columns:
+        if pre_calculated_bounds is not None and col in pre_calculated_bounds:
+            # Use pre-calculated bounds
+            lower_bound = pre_calculated_bounds[col]["lower"]
+            upper_bound = pre_calculated_bounds[col]["upper"]
+        else:
+            # Calculate new bounds
+            Q1 = capped_df[col].quantile(0.25)
+            Q3 = capped_df[col].quantile(0.75)
+            IQR = Q3 - Q1
+
+            # Calculate bounds
+            lower_bound = Q1 - iqr_multiplier * IQR
+            upper_bound = Q3 + iqr_multiplier * IQR
+
+            # Store bounds for later use
+            bounds[col] = {"lower": lower_bound, "upper": upper_bound}
+
+        # Count outliers before capping
+        outliers_count = (
+            (capped_df[col] < lower_bound) | (capped_df[col] > upper_bound)
+        ).sum()
+
+        # Cap values
+        capped_df[col] = np.clip(capped_df[col], lower_bound, upper_bound)
+
+        if verbose:
+            print(
+                f"Capped {col}: "
+                f"lower bound = {lower_bound:.3f}, "
+                f"upper bound = {upper_bound:.3f}, "
+                f"outliers = {outliers_count}"
+            )
+
+    if return_bounds and pre_calculated_bounds is None:
+        return capped_df, bounds
+    return capped_df

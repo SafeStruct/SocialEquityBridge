@@ -1,0 +1,184 @@
+# This script processes bridge lines together with rasters providing displacement susceptibility and PS availability
+# To provide a list of bridges with their respective displacement values and spaceborne monitoring availability values
+
+import numpy as np
+
+# import pandas as pd
+import geopandas as gpd
+from rasterstats import zonal_stats
+from ps_predictions.second_paper.risk_calculation.utils.monitoring_class_calculations import (
+    assign_monitoring_class,
+    monitoring_class_stats,
+)
+
+
+def count_zeros(x):
+    return np.sum(x == 0)
+
+# Define the input and output paths
+path_bridge_lines_pattern = (
+    "/mnt/g/SOCIAL_PAPER/HPC_output_updated/nbi_segments_segment_{}.shp"
+)
+path_combined_lines = "/mnt/g/SOCIAL_PAPER/HPC_output_updated/combined_nbi_lines.shp"
+path_displacement_suceptibility = (
+    "/mnt/g/SOCIAL_PAPER/California_subsidence/vertical_displacement_Govorcin_paper/"
+    "CA_VLM_fixed_filled2px.tif"
+)
+path_PS_predictions = "/mnt/g/SOCIAL_PAPER/merged_california.tif"
+
+path_output_csv_displacement = "/mnt/g/SOCIAL_PAPER/bridge_lines_displacement.csv"
+path_output_csv_spaceborne_monitoring = (
+    "/mnt/g/SOCIAL_PAPER/bridge_lines_spaceborne_monitoring.csv"
+)
+path_output_csv_displacement_spaceborne_monitoring = (
+    "/mnt/g/SOCIAL_PAPER/bridge_lines_displacement_spaceborne_monitoring.csv"
+)
+path_output_shapefile_displacement_spaceborne_monitoring = (
+    "/mnt/g/SOCIAL_PAPER/bridge_lines_displacement_spaceborne_monitoring.shp"
+)
+
+# Read combined lines for displacement susceptibility
+gdf_combined_lines = gpd.read_file(path_combined_lines)
+
+# Compute zonal statistics for displacement susceptibility on combined lines
+stats_displ = zonal_stats(
+    gdf_combined_lines,
+    path_displacement_suceptibility,
+    nodata=255,
+    all_touched=True,
+    geojson_out=True,
+    stats="count min mean max std sum nodata",
+    add_stats={"zero_count": count_zeros},
+)
+
+# Convert the statistics to a GeoDataFrame
+df_zonal_stats_displ = gpd.GeoDataFrame.from_features(stats_displ).set_crs(epsg=4326)
+
+# Rename the columns for displacement stats
+df_zonal_stats_displ.rename(
+    columns={
+        "count": "count_displ",
+        "min": "min_displ",
+        "mean": "mean_displ",
+        "max": "max_displ",
+        "std": "std_displ",
+        "sum": "sum_displ",
+        "nodata": "nodata_displ",
+        "zero_count": "zero_count_displ",
+    },
+    inplace=True,
+)
+
+# Save displacement stats
+df_zonal_stats_displ.to_csv(path_output_csv_displacement)
+
+# Initialize empty list to store results for each segment
+all_stats_PS = []
+
+# Process each segment for PS availability
+for segment_id in range(1, 6):
+    print(f"Processing segment {segment_id}")
+    path_bridge_lines = path_bridge_lines_pattern.format(segment_id)
+
+    # Read gdf with bridge lines for this segment
+    gdf_bridge_lines = gpd.read_file(path_bridge_lines)
+
+    # Compute zonal statistics for PS availability
+    stats_PS = zonal_stats(
+        gdf_bridge_lines,
+        path_PS_predictions,
+        nodata=255,
+        all_touched=True,
+        geojson_out=True,
+        stats="count min mean max std sum nodata",
+        add_stats={"zero_count": count_zeros},
+    )
+
+    # Convert the statistics to a GeoDataFrame
+    stats_PS = gpd.GeoDataFrame.from_features(stats_PS).set_crs(epsg=4326)
+
+    # Rename the columns for PS stats with segment ID
+    stats_PS.rename(
+        columns={
+            "count": f"count_PS_{segment_id}",
+            "min": f"min_PS_{segment_id}",
+            "mean": f"mean_PS_{segment_id}",
+            "max": f"max_PS_{segment_id}",
+            "std": f"std_PS_{segment_id}",
+            "sum": f"sum_PS_{segment_id}",
+            "nodata": f"nodata_PS_{segment_id}",
+            "zero_count": f"zero_count_PS_{segment_id}",
+        },
+        inplace=True,
+    )
+
+    if segment_id == 1:
+        df_zonal_stats_PS = stats_PS
+    else:
+        # Get only the new segment-specific columns
+        new_columns = [
+            col for col in stats_PS.columns if col.endswith(f"_{segment_id}")
+        ]
+        new_columns.append("ID")  # Keep the ID column for merging
+
+        # Merge only the new columns with existing DataFrame
+        df_zonal_stats_PS = df_zonal_stats_PS.merge(
+            stats_PS[new_columns], on="ID", how="outer"
+        )
+
+# Calculate percentage of PS availability for each bridge and each section
+# as a share of pixels with PS data over all pixels
+# Set 0 availability if no data for a bridge
+for section_id in range(1, 6):
+    df_zonal_stats_PS[f"ps_avail_perc_{section_id}"] = np.where(
+        (df_zonal_stats_PS[f"zero_count_PS_{section_id}"] == 0)
+        & (df_zonal_stats_PS[f"count_PS_{section_id}"] == 0),
+        0,  # when no data for a bridge (both values 0)
+        1
+        - df_zonal_stats_PS[f"zero_count_PS_{section_id}"]
+        / df_zonal_stats_PS[f"count_PS_{section_id}"],
+    )
+
+    # Calculate the number of PS pixels per 100m of bridge for each section
+    df_zonal_stats_PS[f"ps_count_100m_{section_id}"] = (
+        df_zonal_stats_PS[f"sum_PS_{section_id}"]
+        * 100
+        / df_zonal_stats_PS["Total Leng"]
+    )
+
+# Get the monitoring factor for each section
+df_zonal_stats_PS = assign_monitoring_class(df_zonal_stats_PS, nb_sections=5)
+
+# Add a column with Snt availability equal to 4 for all bridges
+df_zonal_stats_PS["SNT_availability"] = 4
+
+# Assign the monitoring class
+df_zonal_stats_PS = monitoring_class_stats(df_zonal_stats_PS, snt_status="")
+
+# # Correct the monitoring factor by Sentinel availability
+# # assuming that over California both Sentinel flight directions are available
+# # every 12 days, so correct by -.1
+# for section_id in range(1, 6):
+#     df_zonal_stats_PS[f"Monitoring_{section_id}"] = (
+#         df_zonal_stats_PS[f"Monitoring_{section_id}"] - 0.1
+#     )
+
+
+# # Rename columns Monitoring_1 to Monitoring_5 to spaceborne monitoring with section numbers
+# df_zonal_stats_PS.rename(
+#     columns={
+#         f"Monitoring_{i}": f"spaceborne_monitoring_{i}"
+#         for i in range(1, 6)
+#     },
+#     inplace=True,
+# )
+
+# Save the dataframe to csv
+df_zonal_stats_PS.to_csv(path_output_csv_spaceborne_monitoring)
+
+# Merge the two dataframes
+df_merged = df_zonal_stats_displ.merge(
+    df_zonal_stats_PS, left_index=True, right_index=True
+)
+
+df_merged.to_csv(path_output_csv_displacement_spaceborne_monitoring)
