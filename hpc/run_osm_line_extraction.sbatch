@@ -22,6 +22,9 @@ source "$(conda info --base)/etc/profile.d/conda.sh"
 # Activate conda, run job, deactivate conda
 conda activate /scratch/dmalinowska/.conda/envs/cpu_env_for_3rd_paper
 
+# Point pipeline scripts at cluster data directory
+export BVI_DATA_ROOT=/scratch/dmalinowska/SOCIAL_PAPER
+
 # Run the python script in a loop, changing the range with each iteration, so that each iteration only
 # processes 1024 bridges at a time
 for i in {15360..23000..1024}

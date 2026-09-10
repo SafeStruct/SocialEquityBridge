@@ -1,25 +1,69 @@
-# Copy to paths.yaml and set paths for your environment.
-# Alternatively, set the BVI_DATA_ROOT environment variable.
+# Copy to paths.yaml and set data_root for your machine:
+#   cp config/paths.example.yaml config/paths.yaml
+#
+# Or set only the root via environment variable:
+#   export BVI_DATA_ROOT=/mnt/e/SOCIAL_PAPER
+#
+# Path roles:
+#   external    — third-party or manual data (must exist before the pipeline)
+#   intermediate — produced by one step, consumed by later steps
+#   outputs     — final results (tables, figures, analysis folders)
 
 data_root: /path/to/SOCIAL_PAPER
 
-nbi:
-  raw_dir: "{data_root}/California_brdgs/NBI/2024del"
-  bridges_csv: "{data_root}/California_brdgs/NBI/nbi_bridges.csv"
-  bridges_geo_csv: "{data_root}/California_brdgs/NBI/nbi_bridges_geo.csv"
-  bridges_enriched_csv: "{data_root}/California_brdgs/NBI/nbi_bridges_geo_county.csv"
+external:
+  nbi:
+    raw_dir: "{data_root}/California_brdgs/NBI/2024del"
+    raw_file: CA24.txt
+  auxiliary:
+    county_codes_csv: "{data_root}/California_county_codes/county_codes.csv"
+    county_gdp_xlsx: "{data_root}/California_county_GDP_2023/California_GDP_manually_extracted.xlsx"
+    counties_shp: "{data_root}/California_borders/ca_counties/CA_Counties.shp"
+    cdc_svi_csv: "{data_root}/CDC_Social_Vulnerability_2022/California_county_2022.csv"
+  displacement:
+    vlm_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif"
+  ps_density:
+    raster: "{data_root}/merged_california.tif"
+  validation:
+    sr_bvi_merged_csv: "{data_root}/California_brdgs/NBI/sr_bvi_merged.csv"
 
-osm:
-  hpc_output_dir: "{data_root}/HPC_output_updated"
-  combined_lines: "{data_root}/HPC_output_updated/combined_nbi_lines.shp"
+intermediate:
+  nbi:
+    bridges_csv: "{data_root}/California_brdgs/NBI/nbi_bridges.csv"
+    bridges_shp: "{data_root}/California_brdgs/NBI/nbi_bridges.shp"
+    bridges_geo_csv: "{data_root}/California_brdgs/NBI/nbi_bridges_geo.csv"
+    bridges_enriched_csv: "{data_root}/California_brdgs/NBI/nbi_bridges_geo_county.csv"
+    lines_dir: "{data_root}/California_brdgs/NBI"
+  osm:
+    hpc_output_dir: "{data_root}/HPC_output"
+    combined_lines: "{data_root}/HPC_output/combined_nbi_lines.shp"
+    segments_pattern: "{data_root}/HPC_output/nbi_segments_segment_{}.shp"
+  bridge_lines:
+    displacement_csv: "{data_root}/bridge_lines_displacement.csv"
+    monitoring_csv: "{data_root}/bridge_lines_spaceborne_monitoring.csv"
+    combined_csv: "{data_root}/bridge_lines_displacement_spaceborne_monitoring.csv"
+    combined_shp: "{data_root}/bridge_lines_displacement_spaceborne_monitoring.shp"
+  displacement:
+    fixed_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed.tif"
+    susceptibility_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif"
 
-displacement:
-  raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif"
-
-ps_density:
-  raster: "{data_root}/merged_california.tif"
-
-results:
-  pfa_dir: "{data_root}/PFA_results_08_01_2026"
-  plots_dir: "{data_root}/plots_08_01_2026"
-  maps_dir: "{data_root}/plots_maps_08_01_2026"
+outputs:
+  index:
+    pfa_dir: "{data_root}/PFA_results_08_01_2026"
+    plots_dir: "{data_root}/plots_08_01_2026"
+  maps:
+    maps_dir: "{data_root}/plots_maps_08_01_2026"
+    indicator_contributions_csv: "{data_root}/indicator_contributions.csv"
+  sensitivity:
+    dir: "{data_root}/monte_carlo_sensitivity"
+  validation:
+    sr_results_csv: "{data_root}/California_brdgs/NBI/sufficiency_rating_results.csv"
+    sr_summary_csv: "{data_root}/California_brdgs/NBI/sufficiency_rating_summary.csv"
+    sr_quality_csv: "{data_root}/California_brdgs/NBI/data_quality_report.csv"
+    comparison_png: "{data_root}/California_brdgs/NBI/sr_vs_bvi_final_comparison.png"
+    detailed_table_csv: "{data_root}/California_brdgs/NBI/sr_vs_bvi_detailed_table.csv"
+    paper_summary_txt: "{data_root}/California_brdgs/NBI/sr_vs_bvi_paper_summary.txt"
+    poor_bridges_benchmark_csv: "{data_root}/PFA_results/bvi_poorbrdgs_benchmarking.csv"
+  legacy:
+    weighted_subindicators_csv: "{data_root}/PFA_results/weighted_subindicators.csv"
+    bivariate_bins_csv: "{data_root}/PFA_results/bivariate_bins.csv"
