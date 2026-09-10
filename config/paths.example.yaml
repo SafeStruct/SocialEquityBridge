@@ -24,8 +24,6 @@ external:
     vlm_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif"
   ps_density:
     raster: "{data_root}/merged_california.tif"
-  validation:
-    sr_bvi_merged_csv: "{data_root}/California_brdgs/NBI/sr_bvi_merged.csv"
 
 intermediate:
   nbi:
@@ -42,28 +40,18 @@ intermediate:
     displacement_csv: "{data_root}/bridge_lines_displacement.csv"
     monitoring_csv: "{data_root}/bridge_lines_spaceborne_monitoring.csv"
     combined_csv: "{data_root}/bridge_lines_displacement_spaceborne_monitoring.csv"
-    combined_shp: "{data_root}/bridge_lines_displacement_spaceborne_monitoring.shp"
   displacement:
     fixed_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed.tif"
     susceptibility_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif"
 
 outputs:
   index:
-    pfa_dir: "{data_root}/PFA_results_08_01_2026"
-    plots_dir: "{data_root}/plots_08_01_2026"
+    pfa_dir: "{data_root}/PFA_results_{run_date}"
+    plots_dir: "{data_root}/plots_{run_date}"
   maps:
-    maps_dir: "{data_root}/plots_maps_08_01_2026"
+    maps_dir: "{data_root}/plots_maps_{run_date}"
     indicator_contributions_csv: "{data_root}/indicator_contributions.csv"
   sensitivity:
     dir: "{data_root}/monte_carlo_sensitivity"
   validation:
-    sr_results_csv: "{data_root}/California_brdgs/NBI/sufficiency_rating_results.csv"
-    sr_summary_csv: "{data_root}/California_brdgs/NBI/sufficiency_rating_summary.csv"
-    sr_quality_csv: "{data_root}/California_brdgs/NBI/data_quality_report.csv"
-    comparison_png: "{data_root}/California_brdgs/NBI/sr_vs_bvi_final_comparison.png"
-    detailed_table_csv: "{data_root}/California_brdgs/NBI/sr_vs_bvi_detailed_table.csv"
-    paper_summary_txt: "{data_root}/California_brdgs/NBI/sr_vs_bvi_paper_summary.txt"
-    poor_bridges_benchmark_csv: "{data_root}/PFA_results/bvi_poorbrdgs_benchmarking.csv"
-  legacy:
-    weighted_subindicators_csv: "{data_root}/PFA_results/weighted_subindicators.csv"
-    bivariate_bins_csv: "{data_root}/PFA_results/bivariate_bins.csv"
+    poor_bridges_benchmark_csv: "{data_root}/PFA_results_{run_date}/bvi_poorbrdgs_benchmarking.csv"

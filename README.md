@@ -37,6 +37,12 @@ cp config/paths.example.yaml config/paths.yaml
 export BVI_DATA_ROOT=/mnt/e/SOCIAL_PAPER
 ```
 
+Dated output folders (`PFA_results_{run_date}`, `plots_{run_date}`, `plots_maps_{run_date}`) use today's date (`DD_MM_YYYY`) automatically. To pin a specific run date:
+
+```bash
+export BVI_RUN_DATE=08_01_2026
+```
+
 **HPC override** (set in your Slurm script):
 
 ```bash
@@ -75,7 +81,7 @@ Run every script from the repository root with Poetry:
 poetry run python -m bridge_vulnerability.<package>.<module>
 ```
 
-After step 1, steps 2–4 can run in parallel. Step 5 requires steps 2–4. Steps 6–12 depend on earlier outputs as noted below.
+After step 1, steps 2–4 can run in parallel. Step 5 requires steps 2–4. Steps 6–11 depend on earlier outputs as noted below.
 
 ### NBI inventory
 
@@ -116,7 +122,7 @@ poetry run python -m bridge_vulnerability.data_prep.osm_combine_lines
 
 ### Displacement rasters (can run in parallel with steps 2–3)
 
-**Step 4. `data_prep.displacement_fix_nodata`** — Replaces NaN nodata values in the Govorcin VLM displacement raster with a sentinel value for downstream zonal statistics.
+**Step 4. `data_prep.displacement_fix_nodata`** — Replaces NaN nodata values in the Govorcin VLM displacement raster with a fixed placeholder value (999) for downstream zonal statistics.
 
 **Input:** `external.displacement.vlm_raster` (e.g. `CA_VLM.tif`). **Output:** `intermediate.displacement.fixed_raster` (e.g. `CA_VLM_fixed.tif`).
 
@@ -130,7 +136,7 @@ Step 5 reads **`intermediate.displacement.susceptibility_raster`** (default: `CA
 
 **Provided in the data bundle:** This file is included under `{data_root}/intermediate/...` so most users do not need to recreate it.
 
-**How it was produced:** Step 4 converts missing VLM pixels (NaN) to a nodata sentinel (`CA_VLM_fixed.tif`). The susceptibility raster adds **2-pixel interpolation in QGIS** to fill remaining gaps so displacement values exist over all bridge locations — including areas where the original VLM data had no coverage due to loss of coherence over water or vegetated areas.
+**How it was produced:** Step 4 converts missing VLM pixels (NaN) to a fixed nodata value of 999 (`CA_VLM_fixed.tif`). The susceptibility raster adds **2-pixel interpolation in QGIS** to fill remaining gaps so displacement values exist over all bridge locations — including areas where the original VLM data had no coverage due to loss of coherence over water or vegetated areas.
 
 > *From the paper:* “For this work, interpolation was applied to the VLM dataset to fill missing data pixels and ensure coverage over all bridges not covered by the original data due to loss of coherence over water or vegetated areas.”
 
@@ -140,7 +146,7 @@ Step 5 reads **`intermediate.displacement.susceptibility_raster`** (default: `CA
 
 **Step 5. `data_prep.extract_bridge_raster_stats`** — Computes zonal statistics of displacement susceptibility and PS density along bridge lines and writes per-bridge CSV/shapefile outputs.
 
-**Input:** `intermediate.osm.combined_lines`, `intermediate.osm.segments_pattern` (segments 1–5), `intermediate.displacement.susceptibility_raster`, `external.ps_density.raster`. **Output:** `intermediate.bridge_lines.displacement_csv`, `monitoring_csv`, `combined_csv`, and `combined_shp`.
+**Input:** `intermediate.osm.combined_lines`, `intermediate.osm.segments_pattern` (segments 1–5), `intermediate.displacement.susceptibility_raster`, `external.ps_density.raster`. **Output:** `intermediate.bridge_lines.displacement_csv`, `monitoring_csv`, and `combined_csv`.
 
 ```bash
 poetry run python -m bridge_vulnerability.data_prep.extract_bridge_raster_stats
@@ -156,7 +162,7 @@ poetry run python -m bridge_vulnerability.data_prep.extract_bridge_raster_stats
 poetry run python -m bridge_vulnerability.data_prep.nbi_enrich
 ```
 
-**Yes, this must be run.** `build_bvi`, `sufficiency_rating`, `bridge_count_maps`, and `monte_carlo` all read `intermediate.nbi.bridges_enriched_csv`, which only this script creates.
+**Required for steps 7–10:** downstream scripts (`build_bvi`, `bridge_count_maps`, `monte_carlo`) read `intermediate.nbi.bridges_enriched_csv`, which only this step produces.
 
 ### Build BVI (PCA/PFA)
 
@@ -190,31 +196,21 @@ poetry run python -m bridge_vulnerability.plotting.bridge_count_maps
 
 **Step 10. `sensitivity.monte_carlo`** — Runs Monte Carlo / Sobol sensitivity analysis over PCA and threshold parameters (slow; re-runs the index many times).
 
-**Input:** `intermediate.nbi.bridges_enriched_csv` (re-loaded internally), `outputs.legacy.weighted_subindicators_csv` (reference for plots). **Output:** `outputs.sensitivity.dir` (e.g. `sensitivity_results_threshold_rankings.csv`, Sobol indices CSVs, and diagnostic figures).
+**Input:** `intermediate.nbi.bridges_enriched_csv` (re-loaded internally), `outputs.index.pfa_dir/weighted_subindicators.csv` from step 8 (reference for plots). **Output:** `outputs.sensitivity.dir` (e.g. `sensitivity_results_threshold_rankings.csv`, Sobol indices CSVs, and diagnostic figures).
 
 ```bash
 poetry run python -m bridge_vulnerability.sensitivity.monte_carlo
 ```
 
-### Validation against Sufficiency Rating
+### Validation
 
-**Step 11. `validation.sufficiency_rating`** — Computes NBI Sufficiency Rating scores from enriched bridge data (can run after step 6; independent of the BVI index).
+**Step 11. `validation.benchmark_poor_bridges`** — Compares county BVI rank with poor-bridge replacement-cost rank (requires step 8 for `bivariate_bins.csv`).
 
-**Input:** `intermediate.nbi.bridges_enriched_csv`. **Output:** `outputs.validation.sr_results_csv`, `sr_summary_csv`, and `sr_quality_csv`.
-
-```bash
-poetry run python -m bridge_vulnerability.validation.sufficiency_rating
-```
-
-**Step 12. `validation.benchmark_sr`** — Compares county-level Sufficiency Rating with BVI using a pre-merged external CSV and writes comparison figures and tables.
-
-**Input:** `external.validation.sr_bvi_merged_csv`. **Output:** `outputs.validation.comparison_png`, `detailed_table_csv`, and `paper_summary_txt`.
+**Input:** `outputs.index.pfa_dir/bivariate_bins.csv`, `external.auxiliary.county_gdp_xlsx`. **Output:** `outputs.validation.poor_bridges_benchmark_csv`.
 
 ```bash
-poetry run python -m bridge_vulnerability.validation.benchmark_sr
+poetry run python -m bridge_vulnerability.validation.benchmark_poor_bridges
 ```
-
-See also `notebooks/benchmark_poor_bridges.ipynb` for poor-bridge benchmarking.
 
 ## Pipeline overview
 
@@ -229,13 +225,13 @@ flowchart TD
     F --> J
     H2 --> J
     J --> C[nbi_enrich]
-    C --> K[build_bvi]
+    J --> K[build_bvi]
+    J --> N[monte_carlo]
+    C --> K
     K --> L[vulnerability_maps]
     C --> M[bridge_count_maps]
-    K --> N[monte_carlo]
-    C --> O[sufficiency_rating]
-    K --> P[benchmark_sr]
-    O --> P
+    C --> N
+    L --> P[benchmark_poor_bridges]
 ```
 
 ## Repository structure
@@ -248,13 +244,12 @@ src/bridge_vulnerability/
 ├── plotting/                  # Steps 8–9: result maps
 ├── sensitivity/               # Step 10: Monte Carlo / Sobol analysis
 │   └── helpers/               # Plotting functions used by monte_carlo (not run directly)
-├── validation/                # Steps 11–12: Sufficiency Rating comparison
+├── validation/                # Step 11: poor-bridges benchmark
 └── utils/                     # Shared helpers (OSM, monitoring class, PCA, plotting)
 
 config/paths.example.yaml      # Path template (committed)
 config/paths.yaml              # Your local paths (gitignored)
 hpc/                           # Slurm batch scripts for MPI OSM extraction
-notebooks/                     # Exploratory validation notebooks
 ```
 
 ### Modules that are not run directly
@@ -283,9 +278,8 @@ These are imported by pipeline scripts; do not invoke them with `poetry run pyth
 | 7 | `build_bvi` | `intermediate.nbi.bridges_enriched_csv`, `intermediate.bridge_lines.combined_csv` | `outputs.index.pfa_dir/*`, `outputs.index.plots_dir/*` |
 | 8 | `vulnerability_maps` | `outputs.index.pfa_dir/*`, `external.auxiliary.*` | `outputs.maps.maps_dir/*` |
 | 9 | `bridge_count_maps` | `intermediate.nbi.bridges_enriched_csv`, `external.auxiliary.counties_shp` | `outputs.maps.maps_dir/*` |
-| 10 | `monte_carlo` | enriched NBI + `outputs.legacy.weighted_subindicators_csv` (reference) | `outputs.sensitivity.dir/*` |
-| 11 | `sufficiency_rating` | `intermediate.nbi.bridges_enriched_csv` | `outputs.validation.sr_*` |
-| 12 | `benchmark_sr` | `external.validation.sr_bvi_merged_csv` | `outputs.validation.comparison_png`, etc. |
+| 10 | `monte_carlo` | enriched NBI + `outputs.index.pfa_dir/weighted_subindicators.csv` (from step 8) | `outputs.sensitivity.dir/*` |
+| 11 | `benchmark_poor_bridges` | `outputs.index.pfa_dir/bivariate_bins.csv`, `external.auxiliary.county_gdp_xlsx` | `outputs.validation.poor_bridges_benchmark_csv` |
 
 ## External dependencies
 

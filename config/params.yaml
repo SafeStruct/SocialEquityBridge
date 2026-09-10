@@ -1,0 +1,6 @@
+# Analysis parameters (committed). Change values here rather than in scripts.
+# Override the file with BVI_PARAMS_FILE if needed.
+
+monitoring:
+  # Scales Monitoring from [0, 1] to [1, max_coefficient].
+  max_coefficient: 1.35
