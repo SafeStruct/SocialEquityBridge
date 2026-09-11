@@ -73,6 +73,49 @@ Paths are grouped by role in `config/paths.yaml`:
 | `intermediate` | Files produced by one step and consumed by later steps |
 | `outputs` | Final tables, figures, and analysis directories |
 
+## Required inputs
+
+Before running the pipeline, set `data_root` in `config/paths.yaml` (or `BVI_DATA_ROOT`) and place the following files under that directory. Paths match `config/paths.example.yaml`.
+
+### External data (download or obtain)
+
+| Path under `data_root` | Used in |
+|---|---|
+| `California_brdgs/NBI/2024del/CA24.txt` | Step 1 — raw NBI inventory |
+| `California_county_codes/county_codes.csv` | Step 6 — county FIPS / names |
+| `California_county_GDP_2023/California_GDP_manually_extracted.xlsx` | Steps 6, 11 — county GDP |
+| `California_borders/ca_counties/CA_Counties.shp` (+ sidecars) | Steps 8–9 — county boundaries |
+| `CDC_Social_Vulnerability_2022/California_county_2022.csv` | Step 8 — CDC SVI |
+| `California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif` | Step 4 — displacement raster |
+| `merged_california.tif` | Step 5 — PS density (see [External dependencies](#external-dependencies)) |
+
+### Bundled intermediate (skip HPC steps 2–3b)
+
+These are **not** produced by the local pipeline. Use the published data bundle or regenerate on HPC:
+
+| Path under `data_root` | Used in |
+|---|---|
+| `HPC_output/combined_nbi_lines.shp` (+ sidecars) | Step 5 — displacement zonal stats |
+| `HPC_output/nbi_segments_segment_1.shp` … `nbi_segments_segment_5.shp` | Step 5 — PS density zonal stats |
+
+### Displacement susceptibility (manual if not bundled)
+
+Step 5 reads `California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif`. The data bundle includes this file. To recreate: run step 4, apply 2-pixel QGIS interpolation on `CA_VLM_fixed.tif`, and save as `CA_VLM_fixed_filled2px.tif`.
+
+## Run the full pipeline (local)
+
+For a single end-to-end run of all **non-HPC** steps (1, 4–11, including both Monte Carlo analyses), use:
+
+```bash
+poetry install
+cp config/paths.example.yaml config/paths.yaml   # edit data_root
+./run_full_pipeline.sh
+```
+
+The script checks required inputs, runs each step in order, and stops with QGIS instructions if the susceptibility raster is missing. Steps 2–3b (MPI OSM extraction and segment division) are skipped — pre-generated OSM shapefiles must already be present.
+
+See the header of [`run_full_pipeline.sh`](run_full_pipeline.sh) for the same input checklist in plain text.
+
 ## Running the pipeline
 
 Run every script from the repository root with Poetry:
@@ -81,7 +124,7 @@ Run every script from the repository root with Poetry:
 poetry run python -m bridge_vulnerability.<package>.<module>
 ```
 
-After step 1, steps 2–4 can run in parallel. Step 5 requires steps 2–4. Steps 6–11 depend on earlier outputs as noted below.
+After step 1, steps 2–3 and step 4 (displacement) can run in parallel. Step 3b requires step 3. Step 5 requires step 3b outputs (or bundled shapefiles) and the displacement susceptibility raster. Steps 6–11 depend on earlier outputs as noted below.
 
 ### NBI inventory
 
@@ -95,29 +138,37 @@ poetry run python -m bridge_vulnerability.data_prep.nbi_read
 
 ### OSM bridge lines — optional (HPC only; can run in parallel with step 4)
 
-Most users should **skip steps 2–3**. The published data bundle includes OSM bridge line shapefiles in `{data_root}/intermediate/HPC_output/` (paths relative to `data_root` in `config/paths.yaml`). Step 5 reads these files directly:
+Most users should **skip steps 2–3b**. The published data bundle includes OSM bridge shapefiles in `{data_root}/HPC_output/` (paths relative to `data_root` in `config/paths.yaml`). Step 5 reads these files directly:
 
-| File in `intermediate/HPC_output/` | `paths.yaml` key | Used in |
+| File in `HPC_output/` | `paths.yaml` key | Used in |
 |---|---|---|
 | `combined_nbi_lines.shp` | `intermediate.osm.combined_lines` | Step 5 — displacement zonal stats |
 | `nbi_segments_segment_1.shp` … `nbi_segments_segment_5.shp` | `intermediate.osm.segments_pattern` | Step 5 — PS density zonal stats |
 
-**If you are regenerating lines on HPC** (`poetry install --with hpc`), run steps 2–3 below. They write chunked line shapefiles and a combined layer under `intermediate.osm.hpc_output_dir`. If your output folder or filenames differ from the defaults above, update `intermediate.osm.combined_lines`, `intermediate.osm.segments_pattern`, and `intermediate.osm.hpc_output_dir` in `config/paths.yaml`.
+**If you are regenerating lines on HPC** (`poetry install --with hpc`), run steps 2–3b below. They write chunked shapefiles, combined layers, and five segment shapefiles under `intermediate.osm.hpc_output_dir`. If your output folder or filenames differ from the defaults above, update the `intermediate.osm.*` keys in `config/paths.yaml`.
 
 **Step 2. `data_prep.osm_extract_mpi`** — Extracts OpenStreetMap road lines for each bridge using MPI on an HPC cluster (submit `hpc/run_osm_line_extraction.sbatch`).
 
-**Input:** `intermediate.nbi.bridges_geo_csv`. **Output:** chunked shapefiles in `intermediate.nbi.lines_dir` (`nbi_lines_<start>_<end>.shp`, `nbi_polygons_<start>_<end>.shp`).
+**Input:** `intermediate.nbi.bridges_geo_csv`. **Output:** chunked shapefiles in `intermediate.osm.hpc_output_dir` (`nbi_lines_<start>_<end>.shp`, `nbi_polygons_<start>_<end>.shp`).
 
 ```bash
 srun python -m bridge_vulnerability.data_prep.osm_extract_mpi --min_range 0
 ```
 
-**Step 3. `data_prep.osm_combine_lines`** — Merges chunked OSM line shapefiles from the HPC output folder into a single combined layer.
+**Step 3. `data_prep.osm_combine_lines`** — Merges chunked OSM line and polygon shapefiles from the HPC output folder into combined layers.
 
-**Input:** `intermediate.osm.hpc_output_dir` (`nbi_lines_*.shp` from step 2). **Output:** `intermediate.osm.hpc_output_dir/nbi_lines_combined.shp` (plus diagnostic plots in the same folder).
+**Input:** `intermediate.osm.hpc_output_dir` (`nbi_lines_*.shp`, `nbi_polygons_*.shp` from step 2). **Output:** `intermediate.osm.combined_lines` and `intermediate.osm.combined_polygons` (plus diagnostic plots in the same folder).
 
 ```bash
 poetry run python -m bridge_vulnerability.data_prep.osm_combine_lines
+```
+
+**Step 3b. `data_prep.divide_into_segments`** — Divides each bridge centerline into five along-length segments for PS density zonal statistics.
+
+**Input:** `intermediate.osm.combined_lines`, `intermediate.osm.combined_polygons`. **Output:** `intermediate.osm.centerlines` (`nbi_segments.shp`) and `intermediate.osm.segments_pattern` (`nbi_segments_segment_1.shp` … `_5.shp`).
+
+```bash
+poetry run python -m bridge_vulnerability.data_prep.divide_into_segments
 ```
 
 ### Displacement rasters (can run in parallel with steps 2–3)
@@ -194,13 +245,32 @@ poetry run python -m bridge_vulnerability.plotting.bridge_count_maps
 
 ### Sensitivity analysis
 
-**Step 10. `sensitivity.monte_carlo`** — Runs Monte Carlo / Sobol sensitivity analysis over PCA and threshold parameters (slow; re-runs the index many times).
+**Step 10. `sensitivity.monte_carlo`** — Runs Monte Carlo / Sobol sensitivity analysis (slow; re-runs the index many times). The script supports **two separate analyses**; each run executes only one of them:
 
-**Input:** `intermediate.nbi.bridges_enriched_csv` (re-loaded internally), `outputs.index.pfa_dir/weighted_subindicators.csv` from step 8 (reference for plots). **Output:** `outputs.sensitivity.dir` (e.g. `sensitivity_results_threshold_rankings.csv`, Sobol indices CSVs, and diagnostic figures).
+| `analysis_type` | What varies | What stays fixed |
+|---|---|---|
+| `"threshold"` (default) | Bridge-indicator thresholds (`ADT_THRESHOLD`, detour miles, waterway/scour ratings, displacement) | Base PCA settings in `base_pca_params` |
+| `"pca"` | PCA/index settings (capping, skew/variance thresholds, aggregation method, Mahalanobis cutoff, dropped indicator) | Default thresholds in `default_thresholds` |
+
+**Run both analyses** to get the full sensitivity picture. Either set `BVI_ANALYSIS_TYPE` (no file edit needed) or change `analysis_type` near the top of the `if __name__ == "__main__":` block in `monte_carlo.py`:
 
 ```bash
+# 1) Threshold sensitivity
 poetry run python -m bridge_vulnerability.sensitivity.monte_carlo
+# or: BVI_ANALYSIS_TYPE=threshold poetry run python -m bridge_vulnerability.sensitivity.monte_carlo
+
+# 2) PCA / index sensitivity
+BVI_ANALYSIS_TYPE=pca poetry run python -m bridge_vulnerability.sensitivity.monte_carlo
 ```
+
+`run_full_pipeline.sh` runs both automatically.
+
+**Input:** `intermediate.nbi.bridges_enriched_csv` (re-loaded internally), `outputs.index.pfa_dir/weighted_subindicators.csv` from step 8 (reference for plots).
+
+**Output:** `outputs.sensitivity.dir` — files are tagged by `analysis_type`, for example:
+- `sensitivity_results_threshold_rankings.csv` / `sensitivity_results_pca_rankings.csv`
+- `sobol_indices_threshold_rankings_wide.csv` / `sobol_indices_pca_rankings_wide.csv`
+- Matching diagnostic figures (uncertainty, Sobol indices, variance decomposition)
 
 ### Validation
 
@@ -249,6 +319,7 @@ src/bridge_vulnerability/
 
 config/paths.example.yaml      # Path template (committed)
 config/paths.yaml              # Your local paths (gitignored)
+run_full_pipeline.sh           # End-to-end local pipeline (steps 1, 4–11)
 hpc/                           # Slurm batch scripts for MPI OSM extraction
 ```
 
@@ -259,6 +330,7 @@ These are imported by pipeline scripts; do not invoke them with `poetry run pyth
 | Location | Purpose |
 |---|---|
 | `sensitivity/helpers/monte_carlo_plots.py` | Visualization helpers for `monte_carlo` |
+| `data_prep/bridge_divisions.py` | Geometry helpers for `divide_into_segments` |
 | `utils/osm_bridge_lines.py` | OSM line/polygon extraction logic for `osm_extract_mpi` (requires `--with hpc`) |
 | `utils/monitoring_class.py` | Spaceborne monitoring classification for `extract_bridge_raster_stats` |
 | `utils/pca.py` | PCA/PFA utilities for `build_bvi` and `monte_carlo` |
@@ -270,7 +342,8 @@ These are imported by pipeline scripts; do not invoke them with `poetry run pyth
 | Step | Script | Reads | Writes |
 |---|---|---|---|
 | 1 | `nbi_read` | `external.nbi.*` | `intermediate.nbi.bridges_csv`, `bridges_geo_csv`, `bridges_shp` |
-| 2–3 | `osm_extract_mpi` / `osm_combine_lines` | `intermediate.nbi.bridges_geo_csv`, `intermediate.osm.hpc_output_dir/*` | `intermediate.nbi.lines_dir/*`, combined shapefiles |
+| 2–3 | `osm_extract_mpi` / `osm_combine_lines` | `intermediate.nbi.bridges_geo_csv`, `intermediate.osm.hpc_output_dir/nbi_lines_*.shp` (step 3) | `intermediate.osm.hpc_output_dir/nbi_lines_*.shp`, `nbi_polygons_*.shp`, `combined_nbi_lines.shp`, `combined_nbi_polygons.shp` |
+| 3b | `divide_into_segments` | `intermediate.osm.combined_lines`, `combined_nbi_polygons` | `nbi_segments.shp`, `nbi_segments_segment_*.shp` |
 | 4 | `displacement_fix_nodata` | `external.displacement.vlm_raster` | `intermediate.displacement.fixed_raster` |
 | — | QGIS 2px interpolation (manual) | `intermediate.displacement.fixed_raster` | `intermediate.displacement.susceptibility_raster` |
 | 5 | `extract_bridge_raster_stats` | `external.ps_density.*`, `intermediate.displacement.susceptibility_raster`, `intermediate.osm.*` | `intermediate.bridge_lines.*` |
@@ -278,7 +351,7 @@ These are imported by pipeline scripts; do not invoke them with `poetry run pyth
 | 7 | `build_bvi` | `intermediate.nbi.bridges_enriched_csv`, `intermediate.bridge_lines.combined_csv` | `outputs.index.pfa_dir/*`, `outputs.index.plots_dir/*` |
 | 8 | `vulnerability_maps` | `outputs.index.pfa_dir/*`, `external.auxiliary.*` | `outputs.maps.maps_dir/*` |
 | 9 | `bridge_count_maps` | `intermediate.nbi.bridges_enriched_csv`, `external.auxiliary.counties_shp` | `outputs.maps.maps_dir/*` |
-| 10 | `monte_carlo` | enriched NBI + `outputs.index.pfa_dir/weighted_subindicators.csv` (from step 8) | `outputs.sensitivity.dir/*` |
+| 10 | `monte_carlo` (run twice: `analysis_type` `"threshold"` then `"pca"`) | enriched NBI + `outputs.index.pfa_dir/weighted_subindicators.csv` (from step 8) | `outputs.sensitivity.dir/*` (filenames include `_threshold_` or `_pca_`) |
 | 11 | `benchmark_poor_bridges` | `outputs.index.pfa_dir/bivariate_bins.csv`, `external.auxiliary.county_gdp_xlsx` | `outputs.validation.poor_bridges_benchmark_csv` |
 
 ## External dependencies

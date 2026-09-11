@@ -31,10 +31,11 @@ intermediate:
     bridges_shp: "{data_root}/California_brdgs/NBI/nbi_bridges.shp"
     bridges_geo_csv: "{data_root}/California_brdgs/NBI/nbi_bridges_geo.csv"
     bridges_enriched_csv: "{data_root}/California_brdgs/NBI/nbi_bridges_geo_county.csv"
-    lines_dir: "{data_root}/California_brdgs/NBI"
   osm:
     hpc_output_dir: "{data_root}/HPC_output"
     combined_lines: "{data_root}/HPC_output/combined_nbi_lines.shp"
+    combined_polygons: "{data_root}/HPC_output/combined_nbi_polygons.shp"
+    centerlines: "{data_root}/HPC_output/nbi_segments.shp"
     segments_pattern: "{data_root}/HPC_output/nbi_segments_segment_{}.shp"
   bridge_lines:
     displacement_csv: "{data_root}/bridge_lines_displacement.csv"
