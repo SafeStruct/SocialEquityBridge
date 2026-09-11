@@ -356,7 +356,7 @@ These are imported by pipeline scripts; do not invoke them with `poetry run pyth
 
 ## External dependencies
 
-PS density maps for California were generated with the separate `PS_predictions` repository (`predict_PS_dens_for_region_osmnx.py`). A merged California PS-density GeoTIFF is required as input to step 5.
+PS density maps for California were generated with the PS prediction workflow in [SafeStruct/GlobalRiskBridge](https://github.com/SafeStruct/GlobalRiskBridge) (`src/ps_predictions/predict_PS_dens.ipynb`). That notebook currently supports regions within a single 1×1° tile. To recreate the statewide PS prediction raster, generate all tiles separately and merge them (for example in QGIS). The published data bundle includes the merged California PS-density GeoTIFF required as input to step 5 (`merged_california.tif`), so regenerating the PS density map is optional.
 
 ## License
 

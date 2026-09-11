@@ -35,7 +35,7 @@
 #       Govorcin vertical displacement raster (step 4)
 #
 #   merged_california.tif
-#       Merged California PS-density GeoTIFF (step 5; from PS_predictions repo)
+#       Merged California PS-density GeoTIFF (step 5; from GlobalRiskBridge / data bundle)
 #
 # Bundled intermediate — not produced by this script; must exist before step 5:
 #
