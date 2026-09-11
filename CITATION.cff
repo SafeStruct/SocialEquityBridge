@@ -1,0 +1,34 @@
+cff-version: 1.2.0
+message: If you use this software, please cite the paper below.
+title: California Bridge Vulnerability Index (BVI)
+type: software
+authors:
+  - family-names: Malinowska
+    given-names: Dominika
+license: MIT
+version: "1.0.0"
+doi: 10.1016/j.ijdrr.2026.106115
+url: https://doi.org/10.1016/j.ijdrr.2026.106115
+preferred-citation:
+  type: article
+  authors:
+    - family-names: Malinowska
+      given-names: Dominika
+    - family-names: Petrova
+      given-names: Kristina
+    - family-names: Milillo
+      given-names: Pietro
+    - family-names: Reale
+      given-names: Cormac
+    - family-names: Blenkinsopp
+      given-names: Chris
+    - family-names: Giardina
+      given-names: Giorgia
+  title: >-
+    Integrating structural and social vulnerability for equitable
+    bridge maintenance prioritisation
+  journal: International Journal of Disaster Risk Reduction
+  year: 2026
+  volume: "138"
+  doi: 10.1016/j.ijdrr.2026.106115
+  url: https://doi.org/10.1016/j.ijdrr.2026.106115

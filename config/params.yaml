@@ -1,6 +1,133 @@
 # Analysis parameters (committed). Change values here rather than in scripts.
 # Override the file with BVI_PARAMS_FILE if needed.
+# TODO: document rationale for each threshold and cutoff.
+
+index:
+  # Bridge-indicator thresholds used in the paper run
+  adt_threshold: 25000
+  detour_threshold_miles: 15
+  waterway_eval_threshold: 3
+  scour_critical_threshold: 3
+  displacement_threshold: 10
+  adtt_threshold: 15
+  condition_rating_threshold: 4
+  deck_condition_threshold: 4
+  inventory_rating_threshold: 10.8
+  monitoring_availability_threshold: 0.4
+  inspection_freq_threshold: 24
+  months_till_next_inspection_threshold: 1
+  displacement_fill_value: 30
+
+  # Replacement cost (USD / ft^2). Source: FHWA NBI 2023 estimates
+  replacement_cost_nhs: 360
+  replacement_cost_non_nhs: 466
+  sq_meter_to_sq_feet: 10.76391
+
+  reference_date: "2024-01-01"
+
+  # PCA / PFA (paper run)
+  pca_type: standard
+  capping: true
+  skew_threshold: 1
+  dynamic_components_retention: true
+  variance_threshold: 0.8
+  aggregation_method: complex
+  mahalanobis_threshold: 97.5
+  n_components_retained: 4
+  drop_indicator: none
+  verbose: true
+  return_county_data: true
+  variance_tolerance: 1.0e-10
+
+displacement:
+  nodata_value: 999
+
+raster_stats:
+  nodata: 255
+  n_segments: 5
+
+osm:
+  chunk_size: 1024
+  dist_min: 10
+  dist_max: 40
+  dist_interval: 5
+  primary_buffer_distance: 0.00013
+  length_percentage: 0.15
 
 monitoring:
   # Scales Monitoring from [0, 1] to [1, max_coefficient].
   max_coefficient: 1.35
+  n_sections: 5
+  snt_availability: 4
+  segment_weights: [0.1, 0.25, 0.3, 0.25, 0.1]
+  snt_correction_both_12d: 0.1
+  snt_correction_one_6d: 0.2
+  snt_correction_one_12d: 0.3
+  ps_avail_low: 0.2
+  ps_avail_mid_low: 0.4
+  ps_avail_mid_high: 0.6
+  ps_avail_high: 0.8
+  ps_count_tiny: 1
+  ps_count_low: 3
+  ps_count_mid: 5
+  ps_count_high: 10
+  class_very_low: 0.2
+  class_low: 0.4
+  class_mid: 0.6
+  class_high: 0.8
+  class_full: 1.0
+
+plotting:
+  dpi: 600
+  dpi_pairplot: 300
+  font_size: 14
+  figsize_heatmap: [10, 8]
+  figsize_residual: [10, 8]
+  figsize_map: [10, 10]
+  figsize_scatter: [8, 8]
+  figsize_scatter_subplots: [25, 5]
+  figsize_stacked_bar: [14, 8]
+
+sensitivity:
+  n_samples: 4098
+  batch_size: 128
+  seed: 42
+  analysis_type: threshold
+  threshold_param_ranges:
+    ADT_THRESHOLD: [5000, 25000]
+    DETOUR_THRESHOLD_MILES:
+      range: [8.5, 85]
+      median: 15.0
+    WATERWAY_EVAL_THRESHOLD: [2, 3, 4]
+    SCOUR_CRITICAL_THRESHOLD: [2, 3, 4]
+    DISPLACEMENT_THRESHOLD: [4, 15]
+  threshold_param_distributions:
+    ADT_THRESHOLD: uniform
+    DETOUR_THRESHOLD_MILES: lognormal
+    WATERWAY_EVAL_THRESHOLD: discrete
+    SCOUR_CRITICAL_THRESHOLD: discrete
+    DISPLACEMENT_THRESHOLD: uniform
+  pca_param_ranges:
+    capping: [true, false]
+    skew_threshold: [0, 2]
+    variance_threshold: [0.7, 0.9]
+    aggregation_method: [simplified, complex]
+    mahalanobis_threshold: [95, 100]
+    drop_indicator:
+      - none
+      - high_traffic_load
+      - strategic_importance
+      - long_detour
+      - structural_vulnerability
+      - natural_hazard_vulnerability
+      - load_capacity_issues
+      - brdgs_with_no_monitoring
+      - inspection_frequency_issues
+      - replacement_cost_share_GDP
+  pca_param_distributions:
+    capping: discrete
+    skew_threshold: uniform
+    variance_threshold: uniform
+    aggregation_method: discrete
+    mahalanobis_threshold: uniform
+    drop_indicator: discrete

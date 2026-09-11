@@ -2,27 +2,55 @@
 
 PCA/PFA-based Bridge Vulnerability Index for California bridges, integrating NBI inventory data, displacement susceptibility, and spaceborne monitoring availability.
 
+## How to cite
+
+This repository contains code required to reproduce results for the paper entitled "Integrating structural and social vulnerability for equitable bridge maintenance prioritisation" published in International Journal of Disaster Risk Reduction (DOI [https://doi.org/10.1016/j.ijdrr.2026.106115](https://doi.org/10.1016/j.ijdrr.2026.106115)).
+
+See also [`CITATION.cff`](CITATION.cff).
+
+## Data availability
+
+Input data, intermediate files, and pipeline outputs that reproduce the paper are published on Zenodo (external, intermediate, and outputs). Source URLs and licenses for third-party inputs are described in that dataset.
+
+**DOI:** TODO — add Zenodo DOI after dataset publication
+
+Until the DOI is available, configure `data_root` as described below and place the files listed under [Required inputs](#required-inputs).
+
 ## Installation
 
 Requires Python 3.10.
 
-**Standard install** (local pipeline — sufficient for most users):
+**Poetry** (local pipeline — sufficient for most users):
 
 ```bash
 poetry install
 ```
 
-**Optional HPC install** — only needed to regenerate OSM bridge line shapefiles on a cluster with MPI:
+**Conda** (same default dependencies, Python 3.10):
+
+```bash
+conda env create -f environment.yml
+conda activate bridge-vulnerability-california
+```
+
+**Optional HPC extras** — only needed to regenerate OSM bridge line shapefiles on a cluster with MPI. With Poetry:
 
 ```bash
 poetry install --with hpc
 ```
 
-This adds `mpi4py`, `osmnx`, and `utm`. Most users should skip this and use pre-generated OSM line files configured in `config/paths.yaml`.
+With conda, additionally install `mpi4py`, `osmnx`, and `utm` (for example from conda-forge). Most users should skip this and use pre-generated OSM line files configured in `config/paths.yaml`.
+
+Optional formatting hooks for contributors:
+
+```bash
+poetry install --with dev
+pre-commit install
+```
 
 ## Configuration
 
-All file paths are defined in one place: `config/paths.yaml`.
+File paths are defined in `config/paths.yaml`. Analysis defaults (thresholds, PCA settings, Monte Carlo sample size, plot DPI, and related constants) are defined in `config/params.yaml`. Change values there rather than in scripts.
 
 **Setup (first time):**
 
@@ -46,14 +74,26 @@ export BVI_RUN_DATE=08_01_2026
 **HPC override** (set in your Slurm script):
 
 ```bash
-export BVI_DATA_ROOT=/scratch/dmalinowska/SOCIAL_PAPER
+export BVI_DATA_ROOT=/path/to/data_root
 ```
 
-**Custom config file:**
+**Custom config files:**
 
 ```bash
 export BVI_PATHS_FILE=/path/to/my_paths.yaml
+export BVI_PARAMS_FILE=/path/to/my_params.yaml
 ```
+
+Pipeline scripts also accept the same settings as flags (no file edit needed):
+
+```bash
+poetry run python -m bridge_vulnerability.index.build_bvi \
+  --data-root /path/to/data_root \
+  --run-date 08_01_2026 \
+  --log-level INFO
+```
+
+Common flags on every step: `--data-root`, `--run-date`, `--paths-file`, `--params-file`, `--log-level`, `--dry-run` (print resolved paths and exit). Monte Carlo additionally accepts `--analysis-type`, `--n-samples`, and `--batch-size`. OSM MPI extraction accepts `--min_range` and `--chunk-size`.
 
 **In Python scripts or notebooks:**
 
@@ -245,14 +285,14 @@ poetry run python -m bridge_vulnerability.plotting.bridge_count_maps
 
 ### Sensitivity analysis
 
-**Step 10. `sensitivity.monte_carlo`** — Runs Monte Carlo / Sobol sensitivity analysis (slow; re-runs the index many times). The script supports **two separate analyses**; each run executes only one of them:
+**Step 10. `sensitivity.monte_carlo`** — Runs Monte Carlo / Sobol sensitivity analysis (slow; re-runs the index many times). Each analysis can take up to a few hours. The script supports **two separate analyses**; each run executes only one of them:
 
 | `analysis_type` | What varies | What stays fixed |
 |---|---|---|
 | `"threshold"` (default) | Bridge-indicator thresholds (`ADT_THRESHOLD`, detour miles, waterway/scour ratings, displacement) | Base PCA settings in `base_pca_params` |
 | `"pca"` | PCA/index settings (capping, skew/variance thresholds, aggregation method, Mahalanobis cutoff, dropped indicator) | Default thresholds in `default_thresholds` |
 
-**Run both analyses** to get the full sensitivity picture. Either set `BVI_ANALYSIS_TYPE` (no file edit needed) or change `analysis_type` near the top of the `if __name__ == "__main__":` block in `monte_carlo.py`:
+**Run both analyses** to get the full sensitivity picture. Either set `BVI_ANALYSIS_TYPE` or pass `--analysis-type` (no file edit needed):
 
 ```bash
 # 1) Threshold sensitivity
@@ -260,7 +300,7 @@ poetry run python -m bridge_vulnerability.sensitivity.monte_carlo
 # or: BVI_ANALYSIS_TYPE=threshold poetry run python -m bridge_vulnerability.sensitivity.monte_carlo
 
 # 2) PCA / index sensitivity
-BVI_ANALYSIS_TYPE=pca poetry run python -m bridge_vulnerability.sensitivity.monte_carlo
+poetry run python -m bridge_vulnerability.sensitivity.monte_carlo --analysis-type pca
 ```
 
 `run_full_pipeline.sh` runs both automatically.
@@ -319,8 +359,10 @@ src/bridge_vulnerability/
 
 config/paths.example.yaml      # Path template (committed)
 config/paths.yaml              # Your local paths (gitignored)
+config/params.yaml             # Analysis defaults (thresholds, PCA, Monte Carlo)
 run_full_pipeline.sh           # End-to-end local pipeline (steps 1, 4–11)
 hpc/                           # Slurm batch scripts for MPI OSM extraction
+environment.yml                # Conda environment (Python 3.10)
 ```
 
 ### Modules that are not run directly
@@ -336,6 +378,8 @@ These are imported by pipeline scripts; do not invoke them with `poetry run pyth
 | `utils/pca.py` | PCA/PFA utilities for `build_bvi` and `monte_carlo` |
 | `utils/plotting.py` | Map styling helpers for `vulnerability_maps` and `bridge_count_maps` |
 | `config/paths.py` | Loads `config/paths.yaml` |
+| `config/params.py` | Loads `config/params.yaml` |
+| `config/cli.py` | Shared command-line flags for pipeline scripts |
 
 ## Pipeline I/O reference
 
@@ -353,6 +397,14 @@ These are imported by pipeline scripts; do not invoke them with `poetry run pyth
 | 9 | `bridge_count_maps` | `intermediate.nbi.bridges_enriched_csv`, `external.auxiliary.counties_shp` | `outputs.maps.maps_dir/*` |
 | 10 | `monte_carlo` (run twice: `analysis_type` `"threshold"` then `"pca"`) | enriched NBI + `outputs.index.pfa_dir/weighted_subindicators.csv` (from step 8) | `outputs.sensitivity.dir/*` (filenames include `_threshold_` or `_pca_`) |
 | 11 | `benchmark_poor_bridges` | `outputs.index.pfa_dir/bivariate_bins.csv`, `external.auxiliary.county_gdp_xlsx` | `outputs.validation.poor_bridges_benchmark_csv` |
+
+## Paper figures
+
+TODO: map paper figures to output files after the Zenodo bundle is published.
+
+| Paper figure | Output file |
+|---|---|
+| | |
 
 ## External dependencies
 
