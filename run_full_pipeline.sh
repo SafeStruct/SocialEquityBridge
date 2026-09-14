@@ -34,7 +34,7 @@
 #   California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif
 #       Govorcin vertical displacement raster (step 4)
 #
-#   merged_california.tif
+#   ps_density/merged_california.tif
 #       Merged California PS-density GeoTIFF (step 5; from GlobalRiskBridge / data bundle)
 #
 # Bundled intermediate — not produced by this script; must exist before step 5:

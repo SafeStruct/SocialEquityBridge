@@ -129,7 +129,7 @@ Before running the pipeline, set `data_root` in `config/paths.yaml` (or `BVI_DAT
 | `California_borders/ca_counties/CA_Counties.shp` (+ sidecars) | Steps 8–9 — county boundaries |
 | `CDC_Social_Vulnerability_2022/California_county_2022.csv` | Step 8 — CDC SVI |
 | `California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif` | Step 4 — displacement raster |
-| `merged_california.tif` | Step 5 — PS density (see [External dependencies](#external-dependencies)) |
+| `ps_density/merged_california.tif` | Step 5 — PS density (see [External dependencies](#external-dependencies)) |
 
 ### Bundled intermediate (skip HPC steps 2–3b)
 
@@ -454,7 +454,7 @@ Full Monte Carlo sample dumps (`sensitivity_results_*_rankings.csv`, `sobol_indi
 
 ## External dependencies
 
-PS density maps for California were generated with the PS prediction workflow in [SafeStruct/GlobalRiskBridge](https://github.com/SafeStruct/GlobalRiskBridge) (`src/ps_predictions/predict_PS_dens.ipynb`). That notebook currently supports regions within a single 1×1° tile. To recreate the statewide PS prediction raster, generate all tiles separately and merge them (for example in QGIS). The published data bundle includes the merged California PS-density GeoTIFF required as input to step 5 (`merged_california.tif`), so regenerating the PS density map is optional.
+PS density maps for California were generated with the PS prediction workflow in [SafeStruct/GlobalRiskBridge](https://github.com/SafeStruct/GlobalRiskBridge) (`src/ps_predictions/predict_PS_dens.ipynb`). That notebook currently supports regions within a single 1×1° tile. To recreate the statewide PS prediction raster, generate all tiles separately and merge them (for example in QGIS). The published data bundle includes the merged California PS-density GeoTIFF required as input to step 5 (`ps_density/merged_california.tif`, `external.ps_density.raster`), so regenerating the PS density map is optional.
 
 ## License
 

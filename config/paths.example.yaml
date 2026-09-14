@@ -23,7 +23,7 @@ external:
   displacement:
     vlm_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif"
   ps_density:
-    raster: "{data_root}/merged_california.tif"
+    raster: "{data_root}/ps_density/merged_california.tif"
 
 intermediate:
   nbi:
@@ -38,9 +38,10 @@ intermediate:
     centerlines: "{data_root}/HPC_output/nbi_segments.shp"
     segments_pattern: "{data_root}/HPC_output/nbi_segments_segment_{}.shp"
   bridge_lines:
-    displacement_csv: "{data_root}/bridge_lines_displacement.csv"
-    monitoring_csv: "{data_root}/bridge_lines_spaceborne_monitoring.csv"
-    combined_csv: "{data_root}/bridge_lines_displacement_spaceborne_monitoring.csv"
+    dir: "{data_root}/bridge_lines"
+    displacement_csv: "{data_root}/bridge_lines/bridge_lines_displacement.csv"
+    monitoring_csv: "{data_root}/bridge_lines/bridge_lines_spaceborne_monitoring.csv"
+    combined_csv: "{data_root}/bridge_lines/bridge_lines_displacement_spaceborne_monitoring.csv"
   displacement:
     fixed_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed.tif"
     susceptibility_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif"
