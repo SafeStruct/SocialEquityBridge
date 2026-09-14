@@ -1,0 +1,69 @@
+# Copy to paths.yaml and set data_root to the extracted Zenodo archive:
+#   cp config/paths.example.yaml config/paths.yaml
+#
+# Or set only the root via environment variable:
+#   export BVI_DATA_ROOT=/path/to/extracted_zenodo_archive
+#
+# Layout matches the published dataset (DOI 10.5281/zenodo.22756091):
+#   external     — third-party or manual data (must exist before the pipeline)
+#   intermediate — produced by one step, consumed by later steps
+#   outputs      — paper figures (fig*.png + fig*.csv) and tables (table*.csv)
+#
+# Folders are not dated. To isolate local re-runs, add {run_date} to a path
+# (e.g. outputs/figures_{run_date}) and set BVI_RUN_DATE or --run-date.
+
+data_root: /path/to/extracted_zenodo_archive
+
+external:
+  nbi:
+    raw_dir: "{data_root}/external/California_brdgs/NBI/2024del"
+    raw_file: CA24.txt
+  auxiliary:
+    county_codes_csv: "{data_root}/external/California_county_codes/county_codes.csv"
+    county_gdp_xlsx: "{data_root}/external/California_county_GDP_2023/California_GDP_manually_extracted.xlsx"
+    counties_shp: "{data_root}/external/California_borders/ca_counties/CA_Counties.shp"
+    cdc_svi_csv: "{data_root}/external/CDC_Social_Vulnerability_2022/California_county_2022.csv"
+  displacement:
+    vlm_raster: "{data_root}/external/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif"
+  ps_density:
+    raster: "{data_root}/external/ps_density/merged_california.tif"
+
+intermediate:
+  nbi:
+    bridges_csv: "{data_root}/intermediate/California_brdgs/NBI/nbi_bridges.csv"
+    bridges_shp: "{data_root}/intermediate/California_brdgs/NBI/nbi_bridges.shp"
+    bridges_geo_csv: "{data_root}/intermediate/California_brdgs/NBI/nbi_bridges_geo.csv"
+    bridges_enriched_csv: "{data_root}/intermediate/California_brdgs/NBI/nbi_bridges_geo_county.csv"
+  osm:
+    hpc_output_dir: "{data_root}/intermediate/HPC_output"
+    combined_lines: "{data_root}/intermediate/HPC_output/combined_nbi_lines.shp"
+    combined_polygons: "{data_root}/intermediate/HPC_output/combined_nbi_polygons.shp"
+    centerlines: "{data_root}/intermediate/HPC_output/nbi_segments.shp"
+    segments_pattern: "{data_root}/intermediate/HPC_output/nbi_segments_segment_{}.shp"
+  bridge_lines:
+    dir: "{data_root}/intermediate/bridge_lines"
+    displacement_csv: "{data_root}/intermediate/bridge_lines/bridge_lines_displacement.csv"
+    monitoring_csv: "{data_root}/intermediate/bridge_lines/bridge_lines_spaceborne_monitoring.csv"
+    combined_csv: "{data_root}/intermediate/bridge_lines/bridge_lines_displacement_spaceborne_monitoring.csv"
+  displacement:
+    fixed_raster: "{data_root}/intermediate/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed.tif"
+    susceptibility_raster: "{data_root}/intermediate/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif"
+  index:
+    dir: "{data_root}/intermediate/pfa"
+    county_level_csv: "{data_root}/intermediate/pfa/county_level_df.csv"
+    full_county_scaled_csv: "{data_root}/intermediate/pfa/full_county_scaled.csv"
+    final_weights_csv: "{data_root}/intermediate/pfa/final_weights.csv"
+    weighted_subindicators_csv: "{data_root}/intermediate/pfa/weighted_subindicators.csv"
+    bivariate_bins_csv: "{data_root}/intermediate/pfa/bivariate_bins.csv"
+  sensitivity:
+    dir: "{data_root}/intermediate/sensitivity"
+
+outputs:
+  figures:
+    dir: "{data_root}/outputs/figures"
+  tables:
+    dir: "{data_root}/outputs/tables"
+    table7_csv: "{data_root}/outputs/tables/table7_pca_features_components.csv"
+    table8_csv: "{data_root}/outputs/tables/table8_pcfa_eigenvalues.csv"
+    table9_csv: "{data_root}/outputs/tables/table9_pcfa_factor_loadings_rotated.csv"
+    table10_csv: "{data_root}/outputs/tables/table10_bvi_poorbrdgs_benchmarking.csv"
