@@ -1,6 +1,5 @@
 # Analysis parameters (committed). Change values here rather than in scripts.
 # Override the file with BVI_PARAMS_FILE if needed.
-# TODO: document rationale for each threshold and cutoff.
 
 index:
   # Bridge-indicator thresholds used in the paper run

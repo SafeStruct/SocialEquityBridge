@@ -9,6 +9,10 @@ license: MIT
 version: "1.0.0"
 doi: 10.1016/j.ijdrr.2026.106115
 url: https://doi.org/10.1016/j.ijdrr.2026.106115
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22756091
+    description: Research data on Zenodo
 preferred-citation:
   type: article
   authors:

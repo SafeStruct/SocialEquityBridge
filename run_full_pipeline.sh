@@ -16,36 +16,36 @@
 #
 # External — download or obtain before running:
 #
-#   California_brdgs/NBI/2024del/CA24.txt
+#   external/California_brdgs/NBI/2024del/CA24.txt
 #       Raw California NBI inventory (step 1)
 #
-#   California_county_codes/county_codes.csv
+#   external/California_county_codes/county_codes.csv
 #       County FIPS codes and names (step 6)
 #
-#   California_county_GDP_2023/California_GDP_manually_extracted.xlsx
+#   external/California_county_GDP_2023/California_GDP_manually_extracted.xlsx
 #       County GDP (steps 6 and 11)
 #
-#   California_borders/ca_counties/CA_Counties.shp  (+ .shx, .dbf, .prj, …)
+#   external/California_borders/ca_counties/CA_Counties.shp  (+ .shx, .dbf, .prj, …)
 #       County boundaries for maps (steps 8–9)
 #
-#   CDC_Social_Vulnerability_2022/California_county_2022.csv
+#   external/CDC_Social_Vulnerability_2022/California_county_2022.csv
 #       CDC Social Vulnerability Index (step 8)
 #
-#   California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif
+#   external/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM.tif
 #       Govorcin vertical displacement raster (step 4)
 #
-#   ps_density/merged_california.tif
+#   external/ps_density/merged_california.tif
 #       Merged California PS-density GeoTIFF (step 5; from GlobalRiskBridge / data bundle)
 #
 # Bundled intermediate — not produced by this script; must exist before step 5:
 #
-#   HPC_output/combined_nbi_lines.shp  (+ sidecar files)
-#   HPC_output/nbi_segments_segment_1.shp … nbi_segments_segment_5.shp
+#   intermediate/HPC_output/combined_nbi_lines.shp  (+ sidecar files)
+#   intermediate/HPC_output/nbi_segments_segment_1.shp … nbi_segments_segment_5.shp
 #       Pre-generated OSM bridge shapefiles (skip HPC steps 2–3b)
 #
 # Displacement susceptibility — one of:
 #
-#   California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif
+#   intermediate/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif
 #       Preferred: included in the published data bundle
 #   OR run step 4 below, then apply 2-pixel QGIS interpolation manually and save
 #       as CA_VLM_fixed_filled2px.tif before continuing to step 5
