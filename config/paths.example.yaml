@@ -5,9 +5,9 @@
 #   export BVI_DATA_ROOT=/mnt/e/SOCIAL_PAPER
 #
 # Path roles:
-#   external    — third-party or manual data (must exist before the pipeline)
-#   intermediate — produced by one step, consumed by later steps
-#   outputs     — final results (tables, figures, analysis folders)
+#   external     — third-party or manual data (must exist before the pipeline)
+#   intermediate — produced by one step, consumed by later steps (not the paper bundle)
+#   outputs      — paper figures (fig*.png + fig*.csv) and tables (table*.csv)
 
 data_root: /path/to/SOCIAL_PAPER
 
@@ -44,15 +44,22 @@ intermediate:
   displacement:
     fixed_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed.tif"
     susceptibility_raster: "{data_root}/California_subsidence/vertical_displacement_Govorcin_paper/CA_VLM_fixed_filled2px.tif"
+  index:
+    dir: "{data_root}/intermediate/pfa_{run_date}"
+    county_level_csv: "{data_root}/intermediate/pfa_{run_date}/county_level_df.csv"
+    full_county_scaled_csv: "{data_root}/intermediate/pfa_{run_date}/full_county_scaled.csv"
+    final_weights_csv: "{data_root}/intermediate/pfa_{run_date}/final_weights.csv"
+    weighted_subindicators_csv: "{data_root}/intermediate/pfa_{run_date}/weighted_subindicators.csv"
+    bivariate_bins_csv: "{data_root}/intermediate/pfa_{run_date}/bivariate_bins.csv"
+  sensitivity:
+    dir: "{data_root}/intermediate/sensitivity_{run_date}"
 
 outputs:
-  index:
-    pfa_dir: "{data_root}/PFA_results_{run_date}"
-    plots_dir: "{data_root}/plots_{run_date}"
-  maps:
-    maps_dir: "{data_root}/plots_maps_{run_date}"
-    indicator_contributions_csv: "{data_root}/indicator_contributions.csv"
-  sensitivity:
-    dir: "{data_root}/monte_carlo_sensitivity"
-  validation:
-    poor_bridges_benchmark_csv: "{data_root}/PFA_results_{run_date}/bvi_poorbrdgs_benchmarking.csv"
+  figures:
+    dir: "{data_root}/outputs/figures_{run_date}"
+  tables:
+    dir: "{data_root}/outputs/tables_{run_date}"
+    table7_csv: "{data_root}/outputs/tables_{run_date}/table7_pca_features_components.csv"
+    table8_csv: "{data_root}/outputs/tables_{run_date}/table8_pcfa_eigenvalues.csv"
+    table9_csv: "{data_root}/outputs/tables_{run_date}/table9_pcfa_factor_loadings_rotated.csv"
+    table10_csv: "{data_root}/outputs/tables_{run_date}/table10_bvi_poorbrdgs_benchmarking.csv"

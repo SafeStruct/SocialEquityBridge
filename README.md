@@ -93,7 +93,7 @@ poetry run python -m bridge_vulnerability.index.build_bvi \
   --log-level INFO
 ```
 
-Common flags on every step: `--data-root`, `--run-date`, `--paths-file`, `--params-file`, `--log-level`, `--dry-run` (print resolved paths and exit). Monte Carlo additionally accepts `--analysis-type`, `--n-samples`, and `--batch-size`. OSM MPI extraction accepts `--min_range` and `--chunk-size`.
+Common flags on every step: `--data-root`, `--run-date`, `--paths-file`, `--params-file`, `--log-level`, `--dry-run` (print resolved paths and exit). Monte Carlo additionally accepts `--analysis-type`, `--n-samples`, `--batch-size`, and `--plot-only` (replot Figs 8–9 from intermediate CSVs without re-running sampling). OSM MPI extraction accepts `--min_range` and `--chunk-size`.
 
 **In Python scripts or notebooks:**
 
@@ -101,7 +101,9 @@ Common flags on every step: `--data-root`, `--run-date`, `--paths-file`, `--para
 from bridge_vulnerability.config.paths import paths, p
 
 nbi_csv = paths.intermediate.nbi.bridges_enriched_csv
-results_dir = paths.outputs.index.pfa_dir
+index_dir = paths.intermediate.index.dir
+figures_dir = paths.outputs.figures.dir
+tables_dir = paths.outputs.tables.dir
 county_shp = p("external", "auxiliary", "counties_shp")
 ```
 
@@ -110,8 +112,8 @@ Paths are grouped by role in `config/paths.yaml`:
 | Section | Meaning |
 |---|---|
 | `external` | Third-party or manual data — must exist before running the pipeline |
-| `intermediate` | Files produced by one step and consumed by later steps |
-| `outputs` | Final tables, figures, and analysis directories |
+| `intermediate` | Files produced by one step and consumed by later steps (including glue CSVs under `intermediate/pfa_{run_date}/` and Monte Carlo dumps under `intermediate/sensitivity_{run_date}/`) |
+| `outputs` | Paper artifacts only: `outputs/figures_{run_date}/` (`fig*.png` + paired `fig*.csv`) and `outputs/tables_{run_date}/` (`table*.csv`) |
 
 ## Required inputs
 
@@ -197,7 +199,7 @@ srun python -m bridge_vulnerability.data_prep.osm_extract_mpi --min_range 0
 
 **Step 3. `data_prep.osm_combine_lines`** — Merges chunked OSM line and polygon shapefiles from the HPC output folder into combined layers.
 
-**Input:** `intermediate.osm.hpc_output_dir` (`nbi_lines_*.shp`, `nbi_polygons_*.shp` from step 2). **Output:** `intermediate.osm.combined_lines` and `intermediate.osm.combined_polygons` (plus diagnostic plots in the same folder).
+**Input:** `intermediate.osm.hpc_output_dir` (`nbi_lines_*.shp`, `nbi_polygons_*.shp` from step 2). **Output:** `intermediate.osm.combined_lines` and `intermediate.osm.combined_polygons`.
 
 ```bash
 poetry run python -m bridge_vulnerability.data_prep.osm_combine_lines
@@ -259,7 +261,7 @@ poetry run python -m bridge_vulnerability.data_prep.nbi_enrich
 
 **Step 7. `index.build_bvi`** — Merges enriched NBI data with displacement/monitoring stats, aggregates to county level, and runs PCA/PFA to produce vulnerability weights and scaled indicators.
 
-**Input:** `intermediate.nbi.bridges_enriched_csv`, `intermediate.bridge_lines.combined_csv`. **Output:** `outputs.index.pfa_dir` (e.g. `county_level_df.csv`, `final_weights.csv`, `full_county_scaled.csv`) and diagnostic plots in `outputs.index.plots_dir`.
+**Input:** `intermediate.nbi.bridges_enriched_csv`, `intermediate.bridge_lines.combined_csv`. **Output:** glue CSVs in `intermediate.index` (`county_level_df.csv`, `final_weights.csv`, `full_county_scaled.csv`); paper tables 7–9 in `outputs.tables.dir`; Figs 4–5 (`fig4_*.png` / `fig5_*.png` plus matching `.csv`) in `outputs.figures.dir`.
 
 ```bash
 poetry run python -m bridge_vulnerability.index.build_bvi
@@ -269,7 +271,7 @@ poetry run python -m bridge_vulnerability.index.build_bvi
 
 **Step 8. `plotting.vulnerability_maps`** — Produces county-level vulnerability maps, bivariate plots, and indicator contribution figures from BVI outputs.
 
-**Input:** `outputs.index.pfa_dir` (`county_level_df.csv`, `full_county_scaled.csv`, `final_weights.csv`), `external.auxiliary.counties_shp`, `external.auxiliary.cdc_svi_csv`. **Output:** maps in `outputs.maps.maps_dir` and `outputs.maps.indicator_contributions_csv`.
+**Input:** `intermediate.index` (`county_level_df.csv`, `full_county_scaled.csv`, `final_weights.csv`), `external.auxiliary.counties_shp`, `external.auxiliary.cdc_svi_csv`. **Output:** paper maps as PNG in `outputs.figures.dir` (each with a same-name `.csv`); `intermediate.index.weighted_subindicators_csv` and `bivariate_bins_csv` for later steps.
 
 ```bash
 poetry run python -m bridge_vulnerability.plotting.vulnerability_maps
@@ -277,7 +279,7 @@ poetry run python -m bridge_vulnerability.plotting.vulnerability_maps
 
 **Step 9. `plotting.bridge_count_maps`** — Maps the number of bridges per county (only needs enriched NBI from step 6; can run before step 7).
 
-**Input:** `intermediate.nbi.bridges_enriched_csv`, `external.auxiliary.counties_shp`. **Output:** `outputs.maps.maps_dir/Number of Bridges_map.png`.
+**Input:** `intermediate.nbi.bridges_enriched_csv`, `external.auxiliary.counties_shp`. **Output:** `outputs.figures.dir/fig2_Number of Bridges_map.png` and matching `.csv`.
 
 ```bash
 poetry run python -m bridge_vulnerability.plotting.bridge_count_maps
@@ -301,22 +303,27 @@ poetry run python -m bridge_vulnerability.sensitivity.monte_carlo
 
 # 2) PCA / index sensitivity
 poetry run python -m bridge_vulnerability.sensitivity.monte_carlo --analysis-type pca
+
+# Replot Figs 8–9 from saved intermediate CSVs (no resampling)
+poetry run python -m bridge_vulnerability.sensitivity.monte_carlo --analysis-type threshold --plot-only
+poetry run python -m bridge_vulnerability.sensitivity.monte_carlo --analysis-type pca --plot-only
 ```
 
 `run_full_pipeline.sh` runs both automatically.
 
-**Input:** `intermediate.nbi.bridges_enriched_csv` (re-loaded internally), `outputs.index.pfa_dir/weighted_subindicators.csv` from step 8 (reference for plots).
+**Input:** `intermediate.nbi.bridges_enriched_csv` (re-loaded internally for a full run), `intermediate.index.weighted_subindicators_csv` from step 8 (reference ranks for plots).
 
-**Output:** `outputs.sensitivity.dir` — files are tagged by `analysis_type`, for example:
+**Output:** ranking dumps in `intermediate.sensitivity.dir` (for replotting), tagged by `analysis_type`:
 - `sensitivity_results_threshold_rankings.csv` / `sensitivity_results_pca_rankings.csv`
 - `sobol_indices_threshold_rankings_wide.csv` / `sobol_indices_pca_rankings_wide.csv`
-- Matching diagnostic figures (uncertainty, Sobol indices, variance decomposition)
+
+Paper Figs 8–9 (`fig8a`–`fig8c` for threshold, `fig9a`–`fig9c` for PCA, each with a paired `.csv`) are written to `outputs.figures.dir`. Use `--plot-only` to regenerate those figures from the intermediate CSVs without re-running Monte Carlo.
 
 ### Validation
 
 **Step 11. `validation.benchmark_poor_bridges`** — Compares county BVI rank with poor-bridge replacement-cost rank (requires step 8 for `bivariate_bins.csv`).
 
-**Input:** `outputs.index.pfa_dir/bivariate_bins.csv`, `external.auxiliary.county_gdp_xlsx`. **Output:** `outputs.validation.poor_bridges_benchmark_csv`.
+**Input:** `intermediate.index.bivariate_bins_csv`, `external.auxiliary.county_gdp_xlsx`. **Output:** `outputs.tables.table10_csv` (`table10_bvi_poorbrdgs_benchmarking.csv`: BVI vs traditional replacement-cost rank, with BVI/SVI categories).
 
 ```bash
 poetry run python -m bridge_vulnerability.validation.benchmark_poor_bridges
@@ -341,6 +348,7 @@ flowchart TD
     K --> L[vulnerability_maps]
     C --> M[bridge_count_maps]
     C --> N
+    L --> N
     L --> P[benchmark_poor_bridges]
 ```
 
@@ -392,19 +400,35 @@ These are imported by pipeline scripts; do not invoke them with `poetry run pyth
 | — | QGIS 2px interpolation (manual) | `intermediate.displacement.fixed_raster` | `intermediate.displacement.susceptibility_raster` |
 | 5 | `extract_bridge_raster_stats` | `external.ps_density.*`, `intermediate.displacement.susceptibility_raster`, `intermediate.osm.*` | `intermediate.bridge_lines.*` |
 | 6 | `nbi_enrich` | `external.auxiliary.*`, `intermediate.nbi.bridges_geo_csv`, `intermediate.bridge_lines.displacement_csv` | `intermediate.nbi.bridges_enriched_csv` |
-| 7 | `build_bvi` | `intermediate.nbi.bridges_enriched_csv`, `intermediate.bridge_lines.combined_csv` | `outputs.index.pfa_dir/*`, `outputs.index.plots_dir/*` |
-| 8 | `vulnerability_maps` | `outputs.index.pfa_dir/*`, `external.auxiliary.*` | `outputs.maps.maps_dir/*` |
-| 9 | `bridge_count_maps` | `intermediate.nbi.bridges_enriched_csv`, `external.auxiliary.counties_shp` | `outputs.maps.maps_dir/*` |
-| 10 | `monte_carlo` (run twice: `analysis_type` `"threshold"` then `"pca"`) | enriched NBI + `outputs.index.pfa_dir/weighted_subindicators.csv` (from step 8) | `outputs.sensitivity.dir/*` (filenames include `_threshold_` or `_pca_`) |
-| 11 | `benchmark_poor_bridges` | `outputs.index.pfa_dir/bivariate_bins.csv`, `external.auxiliary.county_gdp_xlsx` | `outputs.validation.poor_bridges_benchmark_csv` |
+| 7 | `build_bvi` | `intermediate.nbi.bridges_enriched_csv`, `intermediate.bridge_lines.combined_csv` | `intermediate.index/*`, `outputs.tables/table7–9`, `outputs.figures/fig4–5` |
+| 8 | `vulnerability_maps` | `intermediate.index/*`, `external.auxiliary.*` | `outputs.figures/fig3, fig6–7, fig10–14`; `intermediate.index/weighted_subindicators.csv`, `bivariate_bins.csv` |
+| 9 | `bridge_count_maps` | `intermediate.nbi.bridges_enriched_csv`, `external.auxiliary.counties_shp` | `outputs.figures/fig2_*` |
+| 10 | `monte_carlo` (run twice: `analysis_type` `"threshold"` then `"pca"`; `--plot-only` to skip sampling) | enriched NBI + `intermediate.index.weighted_subindicators_csv` (from step 8) | `intermediate.sensitivity/*_rankings*.csv`; `outputs.figures/fig8–9` |
+| 11 | `benchmark_poor_bridges` | `intermediate.index.bivariate_bins_csv`, `external.auxiliary.county_gdp_xlsx` | `outputs.tables.table10_csv` |
 
 ## Paper figures
 
-TODO: map paper figures to output files after the Zenodo bundle is published.
+Dated folders use `BVI_RUN_DATE` (default: today as `DD_MM_YYYY`). Paper figures live in `outputs/figures_{run_date}/`; tables in `outputs/tables_{run_date}/`. Each figure is a PNG with a sibling CSV of the plotted values. Minimum paper-only sequence: steps 7 → 8 → 9 → 10 → 11 (step 9 does not need step 7).
 
-| Paper figure | Output file |
-|---|---|
-| | |
+| Paper figure / table | Output file | Folder | Step | Script |
+|---|---|---|---|---|
+| Fig. 2 | `fig2_Number of Bridges_map.png` | `outputs.figures.dir` | 9 | `bridge_count_maps` |
+| Fig. 3a–i | `fig3a_Traffic load.png` … `fig3i_Lack of monitoring.png` | `outputs.figures.dir` | 8 | `vulnerability_maps` |
+| Fig. 4 | `fig4_correlation_matrix_scaled.png` | `outputs.figures.dir` | 7 | `build_bvi` |
+| Fig. 5 | `fig5_residual_correlations.png` | `outputs.figures.dir` | 7 | `build_bvi` |
+| Fig. 6 | `fig6_infrastructure_vulnerability.png` | `outputs.figures.dir` | 8 | `vulnerability_maps` |
+| Fig. 7 | `fig7_dominant_sub_indicator_group.png` | `outputs.figures.dir` | 8 | `vulnerability_maps` |
+| Fig. 8a–c | `fig8a_rankings_uncertainty_threshold.png`, `fig8b_sobol_absolute_variance_decomposition_threshold.png`, `fig8c_sobol_total_effects_threshold.png` | `outputs.figures.dir` | 10 | `monte_carlo --analysis-type threshold` |
+| Fig. 9a–c | `fig9a_rankings_uncertainty_pca.png`, `fig9b_sobol_absolute_variance_decomposition_pca.png`, `fig9c_sobol_total_effects_pca.png` | `outputs.figures.dir` | 10 | `monte_carlo --analysis-type pca` |
+| Fig. 10a–d | `fig10a_social_vulnerability_Socioeconomic status.png` … `fig10d_social_vulnerability_Housing type & transportation.png` | `outputs.figures.dir` | 8 | `vulnerability_maps` |
+| Fig. 11 | `fig11_social_vulnerability_Social Vulnerability Index (SVI).png` | `outputs.figures.dir` | 8 | `vulnerability_maps` |
+| Fig. 12 | `fig12_scatter_social_vs_bridge_vulnerability_subplots.png` | `outputs.figures.dir` | 8 | `vulnerability_maps` |
+| Fig. 13 | `fig13_scatter_matrix_bridge_vs_social.png` | `outputs.figures.dir` | 8 | `vulnerability_maps` |
+| Fig. 14 | `fig14_bivariate.png` | `outputs.figures.dir` | 8 | `vulnerability_maps` |
+| Table 7 | `table7_pca_features_components.csv` | `outputs.tables.dir` | 7 | `build_bvi` |
+| Table 8 | `table8_pcfa_eigenvalues.csv` | `outputs.tables.dir` | 7 | `build_bvi` |
+| Table 9 | `table9_pcfa_factor_loadings_rotated.csv` | `outputs.tables.dir` | 7 | `build_bvi` |
+| Table 10 | `table10_bvi_poorbrdgs_benchmarking.csv` | `outputs.tables.dir` | 11 | `benchmark_poor_bridges` |
 
 ## External dependencies
 
