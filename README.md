@@ -430,6 +430,28 @@ Dated folders use `BVI_RUN_DATE` (default: today as `DD_MM_YYYY`). Paper figures
 | Table 9 | `table9_pcfa_factor_loadings_rotated.csv` | `outputs.tables.dir` | 7 | `build_bvi` |
 | Table 10 | `table10_bvi_poorbrdgs_benchmarking.csv` | `outputs.tables.dir` | 11 | `benchmark_poor_bridges` |
 
+### CSV columns
+
+Each `fig*.png` has a sibling `fig*.csv` of the plotted values (not the full pipeline dumps). Values are rounded in tables 7–9 to two decimals.
+
+| Files | Columns |
+|---|---|
+| Figs 2, 3a–i, 6, 10a–d, 11 | `County Name` / `County` (Fig. 2), `County_Code`, mapped value, `bin` (colour interval). Fig. 2 also has `over_water_count`. |
+| Fig. 4 | `indicator_row`, `indicator_col`, `correlation`, `p_value`, `significant_p05` |
+| Fig. 5 | `indicator_row`, `indicator_col`, `residual_correlation` |
+| Fig. 7 | County, three group contributions, `dominant_sub_indicator_group` (code), `dominant_group` (label) |
+| Figs 8a / 9a | Per-county rank summary: `original_rank`, `min`, `p05`, `p25`, `median`, `p75`, `p95`, `max`, `mean` |
+| Figs 8b / 9b | Per-county `total_variance`, `unexplained_variance`, plus one column per sampled parameter |
+| Figs 8c / 9c | Per-county Sobol total-effect (`ST`) values by parameter |
+| Figs 12–13 | Long form: county, `social_value`, BVI or `bridge_value`, panel `pearson_r` / `p_value` |
+| Fig. 14 | Raw BVI and SVI, `final_scores_bin` / `SVI_bin`, `combined`, `BVI Category`, `Social Vulnerability` (High/Medium/Low) |
+| Table 7 | Indicator rows × unrotated `PC1`… columns |
+| Table 8 | Eigenvalues before extraction and after rotation (blank cells are unretained components) |
+| Table 9 | Rotated factor loadings, unity-sum squared loadings, `Communality`; footer rows `Explained variance` and `Explained/total` |
+| Table 10 | BVI rank vs poor-bridge replacement-cost rank, `Priority Shift` (Traditional − BVI), `BVI Category`, `Social Vulnerability` |
+
+Full Monte Carlo sample dumps (`sensitivity_results_*_rankings.csv`, `sobol_indices_*_rankings_wide.csv`) stay under `intermediate.sensitivity.dir` for `--plot-only`; they are not the figure CSVs.
+
 ## External dependencies
 
 PS density maps for California were generated with the PS prediction workflow in [SafeStruct/GlobalRiskBridge](https://github.com/SafeStruct/GlobalRiskBridge) (`src/ps_predictions/predict_PS_dens.ipynb`). That notebook currently supports regions within a single 1×1° tile. To recreate the statewide PS prediction raster, generate all tiles separately and merge them (for example in QGIS). The published data bundle includes the merged California PS-density GeoTIFF required as input to step 5 (`merged_california.tif`), so regenerating the PS density map is optional.
