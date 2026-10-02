@@ -25,3 +25,4 @@ dependencies:
       - factor-analyzer>=0.5.1
       - SALib>=1.5.1
       - adjusttext>=1.3.0
+      - -e .
